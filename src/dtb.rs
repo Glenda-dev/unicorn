@@ -1,4 +1,6 @@
-use crate::device::{Device, DeviceManager};
+use crate::device::{DeviceManager, DeviceType};
+use alloc::string::String;
+use alloc::vec::Vec;
 use fdt::Fdt;
 use glenda::println;
 
@@ -12,7 +14,7 @@ impl<'a> DtbManager<'a> {
         Some(Self { fdt })
     }
 
-    pub fn scan(&self, _dev_mgr: &mut DeviceManager) {
+    pub fn scan(&self, dev_mgr: &mut DeviceManager) {
         println!("Unicorn: Scanning Device Tree...");
         println!("Model: {}", self.fdt.root().model());
 
@@ -22,21 +24,29 @@ impl<'a> DtbManager<'a> {
                 let first_compat = compatible.first();
                 println!("Unicorn: Found DTB Node: {} (compatible: {})", name, first_compat);
 
+                let mut mmio = Vec::new();
                 if let Some(reg) = node.reg() {
                     for range in reg {
-                        println!(
-                            "  Reg: {:#x} - {:#x}",
+                        mmio.push((
                             range.starting_address as usize,
-                            range.starting_address as usize + range.size.unwrap_or(0)
-                        );
+                            range.size.unwrap_or(0),
+                        ));
                     }
                 }
 
+                let mut irqs = Vec::new();
                 if let Some(interrupts) = node.interrupts() {
                     for irq in interrupts {
-                        println!("  IRQ: {}", irq);
+                        irqs.push(irq);
                     }
                 }
+
+                dev_mgr.add_device(DeviceType::Platform {
+                    name: String::from(name),
+                    compatible: String::from(first_compat),
+                    mmio,
+                    irqs,
+                });
             }
         }
     }

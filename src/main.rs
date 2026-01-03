@@ -123,25 +123,89 @@ fn main() -> ! {
                 // TODO: Return list of devices
                 0
             }
+            protocol::GET_DEVICE_BY_NAME => {
+                let name_len = utcb.mrs_regs[1];
+                if let Some(name) = utcb.get_str(0, name_len) {
+                    if let Some(id) = dev_mgr.find_by_name(name) {
+                        id
+                    } else {
+                        usize::MAX
+                    }
+                } else {
+                    usize::MAX
+                }
+            }
             protocol::MAP_MMIO => {
-                // TODO: Map MMIO for a device
-                0
+                let device_id = utcb.mrs_regs[1];
+                let mmio_index = utcb.mrs_regs[2];
+                let dest_slot = utcb.mrs_regs[3];
+
+                if let Some(dev) = dev_mgr.get_device(device_id) {
+                    match &dev.dev_type {
+                        device::DeviceType::Platform { mmio, .. } => {
+                            if mmio_index < mmio.len() {
+                                let (paddr, size) = mmio[mmio_index];
+
+                                // Request MMIO from Factotum
+                                let factotum = CapPtr(10);
+                                let tag = MsgTag::new(factotum::FACTOTUM_PROTO, 7);
+                                let args = [
+                                    factotum::REQUEST_CAP,
+                                    factotum::CAP_TYPE_MMIO,
+                                    0,      // id (not used for MMIO)
+                                    dest_slot,
+                                    _badge, // target_pid
+                                    paddr,
+                                    size,
+                                ];
+                                factotum.ipc_call(tag, args);
+                                let ret = UTCB::current().mrs_regs[0];
+                                ret
+                            } else {
+                                usize::MAX
+                            }
+                        }
+                        _ => usize::MAX,
+                    }
+                } else {
+                    usize::MAX
+                }
             }
             protocol::GET_IRQ => {
-                let irq = utcb.mrs_regs[1];
-                let dest_slot = utcb.mrs_regs[2];
+                let device_id = utcb.mrs_regs[1];
+                let irq_index = utcb.mrs_regs[2];
+                let dest_slot = utcb.mrs_regs[3];
                 let driver_pid = _badge;
 
-                log!("GET_IRQ {} for PID {} at slot {}", irq, driver_pid, dest_slot);
+                if let Some(dev) = dev_mgr.get_device(device_id) {
+                    match &dev.dev_type {
+                        device::DeviceType::Platform { irqs, .. } => {
+                            if irq_index < irqs.len() {
+                                let irq = irqs[irq_index];
+                                log!(
+                                    "GET_IRQ {} for PID {} at slot {}",
+                                    irq,
+                                    driver_pid,
+                                    dest_slot
+                                );
 
-                let factotum = CapPtr(10);
-                let msg_tag = MsgTag::new(factotum::FACTOTUM_PROTO, 5);
-                // Type 1 (IRQ), id=irq, dest=dest_slot, target=driver_pid
-                let args = [factotum::REQUEST_CAP, 1, irq, dest_slot, driver_pid, 0, 0];
-                factotum.ipc_call(msg_tag, args);
-                let ret = UTCB::current().mrs_regs[0];
-
-                ret
+                                let factotum = CapPtr(10);
+                                let msg_tag = MsgTag::new(factotum::FACTOTUM_PROTO, 5);
+                                // Type 1 (IRQ), id=irq, dest=dest_slot, target=driver_pid
+                                let args =
+                                    [factotum::REQUEST_CAP, 1, irq, dest_slot, driver_pid, 0, 0];
+                                factotum.ipc_call(msg_tag, args);
+                                let ret = UTCB::current().mrs_regs[0];
+                                ret
+                            } else {
+                                usize::MAX
+                            }
+                        }
+                        _ => usize::MAX,
+                    }
+                } else {
+                    usize::MAX
+                }
             }
             protocol::ALLOC_DMA => {
                 // TODO: Allocate DMA memory
@@ -190,6 +254,15 @@ fn spawn_driver(factotum: CapPtr, initrd_cap: CapPtr, entry: &glenda::initrd::En
         log!("Failed to load image for {}", entry.name);
         return;
     }
+
+    // SHARE UNICORN ENDPOINT
+    let utcb = utcb::get();
+    utcb.clear();
+    utcb.cap_transfer = CapPtr(UNICORN_ENDPOINT_SLOT);
+    let mut tag = MsgTag::new(factotum::FACTOTUM_PROTO, 3);
+    tag.set_has_cap();
+    let args = [factotum::SHARE_CAP, 11, pid, 0, 0, 0, 0];
+    factotum.ipc_call(tag, args);
 
     // PROCESS_START
     let msg_tag = MsgTag::new(factotum::PROCESS_START, 3);
