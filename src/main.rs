@@ -4,11 +4,11 @@
 
 extern crate alloc;
 
-use glenda::cap::pagetable::perms;
 use glenda::cap::CapPtr;
+use glenda::cap::pagetable::perms;
+use glenda::console;
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
-use glenda::log;
 use glenda::println;
 use glenda::protocol::factotum;
 use glenda::protocol::unicorn as protocol;
@@ -31,7 +31,7 @@ const INITRD_VA: usize = 0x4000_0000;
 #[unsafe(no_mangle)]
 fn main() -> ! {
     // Initialize logging (assuming cap 5 is console)
-    log::init(CapPtr(5));
+    console::init(CapPtr(5));
     println!("Unicorn: Starting Device Driver Manager...");
 
     let factotum = CapPtr(10);
@@ -72,10 +72,7 @@ fn main() -> ! {
     // Parse Manifest
     let manifest_slice = unsafe { core::slice::from_raw_parts(MANIFEST_ADDR as *const u8, 4096) };
     let manifest = Manifest::parse(manifest_slice);
-    println!(
-        "Unicorn: Parsed manifest with {} drivers",
-        manifest.drivers.len()
-    );
+    println!("Unicorn: Parsed manifest with {} drivers", manifest.drivers.len());
 
     let mut pci_mgr = PciManager::new();
     let mut _dma_mgr = DmaManager::new();
@@ -86,10 +83,7 @@ fn main() -> ! {
 
     // Spawn Drivers from Manifest
     for driver in manifest.drivers {
-        println!(
-            "Unicorn: Processing driver for '{}': {}",
-            driver.compatible, driver.binary
-        );
+        println!("Unicorn: Processing driver for '{}': {}", driver.compatible, driver.binary);
 
         // Find binary in Initrd
         if let Some(entry) = initrd.entries.iter().find(|e| e.name == driver.binary) {
@@ -132,10 +126,7 @@ fn main() -> ! {
                 let dest_slot = utcb.mrs_regs[2];
                 let driver_pid = _badge;
 
-                println!(
-                    "Unicorn: GET_IRQ {} for PID {} at slot {}",
-                    irq, driver_pid, dest_slot
-                );
+                println!("Unicorn: GET_IRQ {} for PID {} at slot {}", irq, driver_pid, dest_slot);
 
                 let factotum = CapPtr(10);
                 let msg_tag = MsgTag::new(factotum::REQUEST_CAP, 4);
