@@ -140,23 +140,7 @@ fn main() -> ! {
                     match &dev.dev_type {
                         device::DeviceType::Platform { mmio, .. } => {
                             if mmio_index < mmio.len() {
-                                let (paddr, size) = mmio[mmio_index];
-
-                                // Request MMIO from Factotum
-                                let factotum = CapPtr(10);
-                                let tag = MsgTag::new(factotum::FACTOTUM_PROTO, 7);
-                                let args = [
-                                    factotum::REQUEST_CAP,
-                                    factotum::CAP_TYPE_MMIO,
-                                    0, // id (not used for MMIO)
-                                    dest_slot,
-                                    _badge, // target_pid
-                                    paddr,
-                                    size,
-                                ];
-                                factotum.ipc_call(tag, args);
-                                let ret = UTCB::current().mrs_regs[0];
-                                ret
+                                unimplemented!()
                             } else {
                                 usize::MAX
                             }
