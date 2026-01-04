@@ -125,12 +125,8 @@ fn main() -> ! {
             }
             protocol::GET_DEVICE_BY_NAME => {
                 let name_len = utcb.mrs_regs[1];
-                if let Some(name) = utcb.get_str(0, name_len) {
-                    if let Some(id) = dev_mgr.find_by_name(name) {
-                        id
-                    } else {
-                        usize::MAX
-                    }
+                if let Some(name) = utcb.read_str(0, name_len) {
+                    if let Some(id) = dev_mgr.find_by_name(&name) { id } else { usize::MAX }
                 } else {
                     usize::MAX
                 }
@@ -152,7 +148,7 @@ fn main() -> ! {
                                 let args = [
                                     factotum::REQUEST_CAP,
                                     factotum::CAP_TYPE_MMIO,
-                                    0,      // id (not used for MMIO)
+                                    0, // id (not used for MMIO)
                                     dest_slot,
                                     _badge, // target_pid
                                     paddr,
