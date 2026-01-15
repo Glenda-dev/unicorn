@@ -49,8 +49,8 @@ fn main() -> ! {
 
     // TODO: Parse Manifest
     let manifest_slice = unsafe { core::slice::from_raw_parts(MANIFEST_ADDR as *const u8, 4096) };
-    let manifest = Manifest::parse(manifest_slice);
-    log!("Parsed manifest with {} drivers", manifest.driver.len());
+    let manifest = Manifest::parse(manifest_slice).expect("Unicorn: Failed to parse manifest");
+    log!("Parsed manifest with {} drivers", manifest.drivers.len());
 
     let mut pci_mgr = PciManager::new();
     let mut _dma_mgr = DmaManager::new();
@@ -60,7 +60,7 @@ fn main() -> ! {
     pci_mgr.scan(&mut dev_mgr);
 
     // Spawn Drivers from Manifest
-    for driver in manifest.driver {
+    for driver in manifest.drivers {
         log!("Processing driver for '{:?}': {}", driver.compatible, driver.binary);
 
         // Find binary in Initrd
