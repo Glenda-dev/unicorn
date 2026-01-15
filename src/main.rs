@@ -75,7 +75,7 @@ fn main() -> ! {
     log!("Listening on endpoint {}", UNICORN_ENDPOINT_SLOT);
 
     loop {
-        let _badge = endpoint.recv();
+        let _badge = endpoint.recv(0);
         let utcb = UTCB::current();
         let tag = utcb.msg_tag;
         let label = tag.label();
