@@ -27,10 +27,7 @@ impl<'a> DtbManager<'a> {
                 let mut mmio = Vec::new();
                 if let Some(reg) = node.reg() {
                     for range in reg {
-                        mmio.push((
-                            range.starting_address as usize,
-                            range.size.unwrap_or(0),
-                        ));
+                        mmio.push((range.starting_address as usize, range.size.unwrap_or(0)));
                     }
                 }
 

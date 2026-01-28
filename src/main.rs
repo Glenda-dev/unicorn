@@ -16,6 +16,7 @@ use crate::layout::{
     FACTOTUM_CAP, INITRD_VA, MANIFEST_ADDR, UNICORN_ENDPOINT_CAP, UNICORN_ENDPOINT_SLOT,
 };
 use crate::pci::PciManager;
+use glenda;
 use glenda::cap::{CapPtr, Endpoint};
 use glenda::initrd::Initrd;
 use glenda::ipc::utcb;
@@ -33,7 +34,7 @@ macro_rules! log {
 }
 
 #[unsafe(no_mangle)]
-fn main() -> ! {
+fn main() -> usize {
     log!("Starting Unicorn Device Driver Manager...");
 
     let factotum = FACTOTUM_CAP;
