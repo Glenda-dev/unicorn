@@ -1,10 +1,11 @@
 use glenda::cap::{CapPtr, Endpoint, Frame};
 
 pub const FACTOTUM_SLOT: usize = 10;
-pub const PLATFORM_SLOT: usize = 11;
-pub const UNICORN_ENDPOINT_SLOT: usize = 12;
-pub const MANIFEST_ADDR: usize = 0x2000_0000;
-pub const INITRD_VA: usize = 0x4000_0000;
+pub const PLATFORM_SLOT: usize = 6;
+pub const UNTYPED_SLOT: usize = 7;
+pub const MMIO_SLOT: usize = 8;
+pub const IRQ_SLOT: usize = 9;
+pub const UNICORN_ENDPOINT_SLOT: usize = 11;
 
 pub const FACTOTUM_CAP: Endpoint = Endpoint::from(CapPtr::from(FACTOTUM_SLOT));
 pub const PLATFORM_CAP: Frame = Frame::from(CapPtr::from(PLATFORM_SLOT));

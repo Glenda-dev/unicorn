@@ -23,8 +23,8 @@ use glenda::ipc::utcb;
 use glenda::ipc::{MsgTag, UTCB};
 use glenda::manifest::Manifest;
 use glenda::mem::ENTRY_VA;
-use glenda::protocol::factotum;
-use glenda::protocol::unicorn as protocol;
+use glenda::protocol::device as protocol;
+use glenda::protocol::process;
 
 #[macro_export]
 macro_rules! log {
@@ -174,7 +174,7 @@ fn spawn_driver(factotum: Endpoint, entry: &glenda::initrd::Entry) {
     utcb.clear();
     utcb.append_str(&entry.name);
 
-    let msg_tag = MsgTag::new(factotum::SPAWN, 2);
+    let msg_tag = MsgTag::new(process::SPAWN, 2);
     let args = [entry.name.len(), 0, 0, 0, 0, 0, 0];
     factotum.call(msg_tag, args);
     let pid = UTCB::current().mrs_regs[0];
@@ -188,7 +188,7 @@ fn spawn_driver(factotum: Endpoint, entry: &glenda::initrd::Entry) {
     // PROCESS_LOAD_IMAGE
     // args: [pid, frame_cap, offset, len, load_addr]
     // frame_cap is initrd_cap (20)
-    let msg_tag = MsgTag::new(factotum::PROCESS_LOAD_IMAGE, 5);
+    let msg_tag = MsgTag::new(process::PROCESS_LOAD_IMAGE, 5);
     let args = [pid, 0, entry.offset, entry.size, ENTRY_VA, 0, 0];
     factotum.call(msg_tag, args);
     let ret = UTCB::current().mrs_regs[0];
@@ -202,12 +202,12 @@ fn spawn_driver(factotum: Endpoint, entry: &glenda::initrd::Entry) {
     let utcb = utcb::get();
     utcb.clear();
     utcb.cap_transfer = UNICORN_ENDPOINT_CAP.cap();
-    let mut tag = MsgTag::new(factotum::FACTOTUM_PROTO, 3);
+    let mut tag = MsgTag::new(process::FACTOTUM_PROTO, 3);
     tag.set_has_cap();
-    let args = [factotum::SHARE_CAP, 11, pid, 0, 0, 0, 0];
+    let args = [process::SHARE_CAP, 11, pid, 0, 0, 0, 0];
     factotum.call(tag, args);
     // PROCESS_START
-    let msg_tag = MsgTag::new(factotum::PROCESS_START, 3);
+    let msg_tag = MsgTag::new(process::PROCESS_START, 3);
     let args = [pid, ENTRY_VA, 0x8000_0000, 0, 0, 0, 0];
     factotum.call(msg_tag, args);
     log!("Started {}", entry.name);
