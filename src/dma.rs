@@ -1,17 +1,23 @@
-extern crate alloc;
-use alloc::vec::Vec;
+use glenda::error::Error;
+use glenda::manager::interface::IDmaService;
 
 pub struct DmaManager {
-    // TODO: Manage DMA pools
+    // Basic DMA manager
 }
 
 impl DmaManager {
     pub fn new() -> Self {
         Self {}
     }
+}
 
-    pub fn alloc(&mut self, _size: usize) -> Option<usize> {
-        // TODO: Implement DMA allocation
-        None
+impl IDmaService for DmaManager {
+    fn alloc_dma(&mut self, _size: usize) -> Result<usize, Error> {
+        // TODO: Implement DMA allocation (physically contiguous)
+        Err(Error::NotSupported)
+    }
+
+    fn free_dma(&mut self, _paddr: usize, _size: usize) {
+        // TODO: Implement DMA free
     }
 }

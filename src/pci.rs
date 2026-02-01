@@ -1,58 +1,69 @@
-use crate::device::{Device, DeviceManager};
-use alloc::vec::Vec;
-use glenda::println;
-
-// QEMU Virt PCIe ECAM Base
-const ECAM_BASE: usize = 0x3000_0000;
+use super::log;
+use glenda::manager::interface::{IDeviceManager, IPciService};
 
 pub struct PciManager {
-    // We might need a reference to DeviceManager or just return a list
+    ecam_base: usize,
 }
 
 impl PciManager {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(ecam_base: usize) -> Self {
+        Self { ecam_base }
     }
 
-    pub fn scan(&mut self, _dev_mgr: &mut DeviceManager) {
-        println!("Unicorn: Scanning PCI bus...");
-
-        // Brute force scan (simplified)
-        for bus in 0..=0 {
-            // Just bus 0 for now
-            for dev in 0..32 {
-                for func in 0..8 {
-                    let vendor_id = self.read_config_16(bus, dev, func, 0x00);
-                    if vendor_id == 0xFFFF {
-                        continue;
-                    }
-
-                    let device_id = self.read_config_16(bus, dev, func, 0x02);
-                    println!(
-                        "Unicorn: Found PCI Device {}:{}.{} ID {:04x}:{:04x}",
-                        bus, dev, func, vendor_id, device_id
-                    );
-
-                    // TODO: Add to DeviceManager
-                }
-            }
-        }
-    }
-
-    fn read_config_32(&self, bus: u8, dev: u8, func: u8, offset: usize) -> u32 {
-        let addr = ECAM_BASE
+    fn get_addr(&self, bus: u8, dev: u8, func: u8, offset: usize) -> usize {
+        self.ecam_base
             + ((bus as usize) << 20)
             + ((dev as usize) << 15)
             + ((func as usize) << 12)
-            + offset;
-        // unsafe { (addr as *const u32).read_volatile() }
-        // We can't read if not mapped. Mocking for now.
-        0xFFFF_FFFF
+            + offset
+    }
+}
+
+impl IPciService for PciManager {
+    fn read_config(&self, bus: u8, dev: u8, func: u8, offset: usize, size: usize) -> u32 {
+        let addr = self.get_addr(bus, dev, func, offset);
+        // In a real system, we'd need this mapped.
+        // For now, we assume it's mapped or we are in a context where we can read it.
+        match size {
+            1 => unsafe { (addr as *const u8).read_volatile() as u32 },
+            2 => unsafe { (addr as *const u16).read_volatile() as u32 },
+            4 => unsafe { (addr as *const u32).read_volatile() },
+            _ => 0,
+        }
     }
 
-    fn read_config_16(&self, bus: u8, dev: u8, func: u8, offset: usize) -> u16 {
-        let val = self.read_config_32(bus, dev, func, offset & !3);
-        let shift = (offset & 3) * 8;
-        ((val >> shift) & 0xFFFF) as u16
+    fn write_config(&mut self, bus: u8, dev: u8, func: u8, offset: usize, value: u32, size: usize) {
+        let addr = self.get_addr(bus, dev, func, offset);
+        match size {
+            1 => unsafe { (addr as *mut u8).write_volatile(value as u8) },
+            2 => unsafe { (addr as *mut u16).write_volatile(value as u16) },
+            4 => unsafe { (addr as *mut u32).write_volatile(value) },
+            _ => {}
+        }
+    }
+
+    fn scan(&mut self, _dev_mgr: &mut dyn IDeviceManager) {
+        log!("Scanning PCI bus...");
+        for bus in 0..=0 {
+            // Simplified
+            for dev in 0..32 {
+                for func in 0..8 {
+                    let vendor_id = self.read_config(bus, dev, func, 0x00, 2) as u16;
+                    if vendor_id == 0xFFFF {
+                        continue;
+                    }
+                    let device_id = self.read_config(bus, dev, func, 0x02, 2) as u16;
+                    log!(
+                        "PCI: Found Device {}:{}.{} ID {:04x}:{:04x}",
+                        bus,
+                        dev,
+                        func,
+                        vendor_id,
+                        device_id
+                    );
+                    // TODO: Create DeviceNode and add to dev_mgr
+                }
+            }
+        }
     }
 }

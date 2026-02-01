@@ -8,7 +8,6 @@ mod device;
 mod dma;
 mod layout;
 mod pci;
-mod platform;
 
 #[macro_export]
 macro_rules! log {
