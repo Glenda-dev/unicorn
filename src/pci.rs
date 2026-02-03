@@ -1,5 +1,5 @@
 use super::log;
-use glenda::manager::interface::{IDeviceManager, IPciService};
+use glenda::interface::{DeviceService, PciService};
 
 pub struct PciManager {
     ecam_base: usize,
@@ -19,7 +19,7 @@ impl PciManager {
     }
 }
 
-impl IPciService for PciManager {
+impl PciService for PciManager {
     fn read_config(&self, bus: u8, dev: u8, func: u8, offset: usize, size: usize) -> u32 {
         let addr = self.get_addr(bus, dev, func, offset);
         // In a real system, we'd need this mapped.
@@ -42,7 +42,7 @@ impl IPciService for PciManager {
         }
     }
 
-    fn scan(&mut self, _dev_mgr: &mut dyn IDeviceManager) {
+    fn scan(&mut self, _dev_mgr: &mut dyn DeviceService) {
         log!("Scanning PCI bus...");
         for bus in 0..=0 {
             // Simplified

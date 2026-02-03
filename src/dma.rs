@@ -1,5 +1,5 @@
 use glenda::error::Error;
-use glenda::manager::interface::IDmaService;
+use glenda::interface::DmaService;
 
 pub struct DmaManager {
     // Basic DMA manager
@@ -11,7 +11,7 @@ impl DmaManager {
     }
 }
 
-impl IDmaService for DmaManager {
+impl DmaService for DmaManager {
     fn alloc_dma(&mut self, _size: usize) -> Result<usize, Error> {
         // TODO: Implement DMA allocation (physically contiguous)
         Err(Error::NotSupported)

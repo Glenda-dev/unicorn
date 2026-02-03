@@ -1,6 +1,5 @@
-use glenda::error::Error;
+use glenda::interface::DeviceService;
 use glenda::manager::device::DeviceNode;
-use glenda::manager::interface::IDeviceManager;
 use glenda::utils::PlatformInfo;
 
 pub struct DeviceManager {
@@ -13,7 +12,7 @@ impl DeviceManager {
     }
 }
 
-impl IDeviceManager for DeviceManager {
+impl DeviceService for DeviceManager {
     fn scan_platform(&mut self, info: &PlatformInfo) {}
     fn find_compatible(&self, compat: &str) -> Option<&DeviceNode> {
         None
