@@ -7,7 +7,6 @@ extern crate alloc;
 mod device;
 mod dma;
 mod layout;
-mod pci;
 
 #[macro_export]
 macro_rules! log {
