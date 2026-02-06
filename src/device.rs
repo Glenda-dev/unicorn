@@ -1,5 +1,5 @@
 use glenda::interface::DeviceService;
-use glenda::manager::device::DeviceNode;
+use glenda::protocol::device::DeviceNode;
 use glenda::utils::PlatformInfo;
 
 pub struct DeviceManager {
