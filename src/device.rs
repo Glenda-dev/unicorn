@@ -1,4 +1,7 @@
+use alloc::string::String;
+use glenda::error::Error;
 use glenda::interface::DeviceService;
+use glenda::ipc::Badge;
 use glenda::protocol::device::DeviceNode;
 use glenda::utils::PlatformInfo;
 
@@ -13,11 +16,10 @@ impl DeviceManager {
 }
 
 impl DeviceService for DeviceManager {
-    fn scan_platform(&mut self, info: &PlatformInfo) {}
-    fn find_compatible(&self, compat: &str) -> Option<&DeviceNode> {
-        None
+    fn scan_platform(&mut self, badge: Badge, info: &PlatformInfo) -> Result<(), Error> {
+        unimplemented!()
     }
-    fn get_node(&self, id: usize) -> Option<&DeviceNode> {
-        None
+    fn find_compatible(&self, badge: Badge, compat: String) -> Result<DeviceNode, Error> {
+        unimplemented!()
     }
 }
