@@ -16,10 +16,10 @@ impl DeviceManager {
 }
 
 impl DeviceService for DeviceManager {
-    fn scan_platform(&mut self, badge: Badge, info: &PlatformInfo) -> Result<(), Error> {
+    fn scan_platform(&mut self, _badge: Badge, _info: &PlatformInfo) -> Result<(), Error> {
         unimplemented!()
     }
-    fn find_compatible(&self, badge: Badge, compat: String) -> Result<DeviceNode, Error> {
+    fn find_compatible(&self, _badge: Badge, _compat: String) -> Result<DeviceNode, Error> {
         unimplemented!()
     }
 }
