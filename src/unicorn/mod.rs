@@ -10,7 +10,6 @@ use glenda::utils::manager::CSpaceManager;
 use glenda::utils::platform::PlatformInfo;
 
 pub mod device;
-pub mod dma;
 pub mod server;
 
 pub struct UnicornManager<'a> {

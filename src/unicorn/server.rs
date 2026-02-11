@@ -1,19 +1,19 @@
-use crate::UnicornManager;
 use crate::layout::{
     BOOTINFO_ADDR, BOOTINFO_SLOT, IRQ_SLOT, MANIFEST_SLOT, MMIO_SLOT, PLATFORM_ADDR, PLATFORM_SLOT,
     RESOURCE_ADDR,
 };
 use crate::log;
+use crate::UnicornManager;
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
 use glenda::interface::{DeviceService, MemoryService, ResourceService, SystemService};
 use glenda::ipc::server::{handle_call, handle_cap_call};
 use glenda::ipc::{Badge, MsgTag, UTCB};
-use glenda::protocol::DEVICE_PROTO;
 use glenda::protocol::device;
-use glenda::protocol::resource::{DEVICE_ENDPOINT, ResourceType};
-use glenda::utils::platform::{PLATFORM_INFO_PAGES, PlatformInfo};
+use glenda::protocol::resource::{ResourceType, DEVICE_ENDPOINT};
+use glenda::protocol::DEVICE_PROTO;
+use glenda::utils::platform::{PlatformInfo, PLATFORM_INFO_PAGES};
 
 impl<'a> SystemService for UnicornManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
@@ -142,14 +142,6 @@ impl<'a> SystemService for UnicornManager<'a> {
                 handle_cap_call(u, |_u| {
                     let handler = s.get_irq(badge)?;
                     Ok(handler.cap())
-                })
-            },
-            (DEVICE_PROTO, device::FIND_COMPATIBLE) => |s: &mut Self, u: &mut UTCB| {
-                handle_call(u, |u| {
-                    let compat = unsafe { u.read_str()? };
-                    let node = s.find_compatible(badge, &compat)?;
-                    unsafe { u.write_postcard(&node)? };
-                    Ok(())
                 })
             },
         }
