@@ -104,6 +104,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
         let node_idx = *self.pids.get(&badge.bits()).ok_or(Error::PermissionDenied)?;
         let node = &self.nodes[node_idx];
         let irq = node.irq as usize;
+        if irq == 0 {
+            return Err(Error::NotSupported);
+        }
         let irq_ptr = CapPtr::concat(IRQ_SLOT, CapPtr::from(irq));
         Ok(IrqHandler::from(irq_ptr))
     }
