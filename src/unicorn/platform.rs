@@ -1,8 +1,8 @@
-use glenda::error::Error;
-use glenda::protocol::device::DeviceDesc;
-
+use crate::log;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use glenda::error::Error;
+use glenda::protocol::device::DeviceDesc;
 
 // 1. 强类型的 ID (句柄)
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -13,17 +13,17 @@ pub struct DeviceId {
 
 // 2. 树节点
 pub struct DeviceNode {
-    parent: Option<DeviceId>,
-    children: Vec<DeviceId>, // 子节点列表
-    id: DeviceId,
-    desc: DeviceDesc,   // 设备描述符
-    state: DeviceState, // 设备状态 (如已初始化、未初始化等)
+    pub parent: Option<DeviceId>,
+    pub children: Vec<DeviceId>, // 子节点列表
+    pub id: DeviceId,
+    pub desc: DeviceDesc,   // 设备描述符
+    pub state: DeviceState, // 设备状态 (如已初始化、未初始化等)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeviceState {
+    Running,
     Ready,
-    NotReady,
     Error,
 }
 
@@ -131,7 +131,7 @@ impl DeviceTree {
             } else {
                 *index_map.get(&node_desc.parent).ok_or(Error::InvalidArgs)?
             };
-
+            log!("Inserting {:?}", node_desc.desc);
             let new_id = self.insert(Some(parent_id), node_desc.desc)?;
             index_map.insert(i, new_id);
         }

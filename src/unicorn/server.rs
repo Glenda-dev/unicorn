@@ -28,9 +28,12 @@ impl<'a> SystemService for UnicornManager<'a> {
             self.res_client.get_cap(Badge::null(), ResourceType::Bootinfo, 0, BOOTINFO_SLOT)?;
         self.res_client.mmap(Badge::null(), Frame::from(frame), BOOTINFO_ADDR, PGSIZE)?;
 
-        // Get MMIO and IRQ capabilities (CNode)
         self.res_client.get_cap(Badge::null(), ResourceType::Mmio, 0, MMIO_SLOT)?;
         self.res_client.get_cap(Badge::null(), ResourceType::Irq, 0, IRQ_SLOT)?;
+
+        self.init_root_platform()?;
+
+        // Get MMIO and IRQ capabilities (CNode)
         self.scan_platform(Badge::null())
     }
 

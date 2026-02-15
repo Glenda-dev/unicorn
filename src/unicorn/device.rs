@@ -3,30 +3,73 @@ use alloc::vec::Vec;
 use glenda::cap::{Frame, IrqHandler};
 use glenda::error::Error;
 use glenda::interface::DeviceService;
+use glenda::interface::ResourceService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::DeviceDescNode;
+use glenda::protocol::resource::ResourceType;
+use glenda::utils::manager::{CSpaceService, NullProvider};
 
 impl<'a> DeviceService for UnicornManager<'a> {
     fn scan_platform(&mut self, _badge: Badge) -> Result<(), Error> {
-        unimplemented!()
+        // Simple helper to trigger scan
+        UnicornManager::scan_platform(self, _badge)
     }
 
-    fn get_mmio(&mut self, _badge: Badge, _id: usize) -> Result<(Frame, usize, usize), Error> {
-        unimplemented!()
+    fn get_mmio(&mut self, badge: Badge, id: usize) -> Result<(Frame, usize, usize), Error> {
+        // 1. Find device node by driver badge
+        let driver_id = badge.bits();
+        let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
+
+        let (base_addr, size) = {
+            let node = self.tree.get_node(node_id).ok_or(Error::InvalidArgs)?;
+            if id >= node.desc.mmio.len() {
+                return Err(Error::InvalidArgs);
+            }
+            let region = &node.desc.mmio[id];
+            (region.base_addr, region.size)
+        };
+
+        // 2. Alloc slot for the MMIO capability
+        let mut null = NullProvider;
+        let slot = self.cspace_mgr.alloc(&mut null)?;
+
+        // 3. Request MMIO capability from Resource Manager
+        // Note: ResourceType::Mmio treats `id` as physical address
+        self.res_client.get_cap(Badge::new(driver_id), ResourceType::Mmio, base_addr, slot)?;
+
+        Ok((Frame::from(slot), base_addr, size))
     }
 
-    fn get_irq(&mut self, _badge: Badge, _id: usize) -> Result<IrqHandler, Error> {
-        unimplemented!()
+    fn get_irq(&mut self, badge: Badge, id: usize) -> Result<IrqHandler, Error> {
+        let driver_id = badge.bits();
+        // 1. Find device node by driver badge
+        let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
+
+        let irq_num = {
+            let node = self.tree.get_node(node_id).ok_or(Error::InvalidArgs)?;
+            if id >= node.desc.irq.len() {
+                return Err(Error::InvalidArgs);
+            }
+            node.desc.irq[id]
+        };
+
+        // 2. Alloc slot for IRQ capability
+        let mut null = NullProvider;
+        let slot = self.cspace_mgr.alloc(&mut null)?;
+
+        // 3. Request IRQ capability from Resource Manager
+        self.res_client.get_cap(Badge::new(driver_id), ResourceType::Irq, irq_num, slot)?;
+
+        Ok(IrqHandler::from(slot))
     }
 
     fn report(&mut self, badge: Badge, desc: Vec<DeviceDescNode>) -> Result<(), Error> {
         let driver_id = badge.bits();
-        if let Some(parent_id) = self.pids.get(&driver_id) {
-            self.tree.mount_subtree(*parent_id, desc)
+        if let Some(&node_id) = self.pids.get(&driver_id) {
+            self.tree.mount_subtree(node_id, desc)?;
+            // Automatically scan to start drivers for new devices
+            UnicornManager::scan_platform(self, Badge::null())
         } else {
-            // If the driver is not registered, we cannot attach the subtree.
-            // For the root platform driver (if any), we might have a special logic,
-            // but usually it should be registered too.
             Err(Error::InvalidArgs)
         }
     }
