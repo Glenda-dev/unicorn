@@ -1,15 +1,13 @@
 use crate::config::Manifest;
-use alloc::boxed::Box;
+use crate::unicorn::platform::{DeviceId, DeviceTree};
 use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::client::ProcessClient;
 use glenda::client::ResourceClient;
-use glenda::protocol::device::DeviceNode;
 use glenda::utils::manager::CSpaceManager;
-use glenda::utils::platform::PlatformInfo;
 
 pub mod device;
+pub mod platform;
 pub mod server;
 
 pub struct UnicornManager<'a> {
@@ -21,9 +19,11 @@ pub struct UnicornManager<'a> {
     pub res_client: &'a mut ResourceClient,
     pub proc_client: &'a mut ProcessClient,
     pub config: Manifest,
-    pub nodes: Vec<DeviceNode>,
-    pub pids: BTreeMap<usize, usize>,
-    pub platform: Option<Box<PlatformInfo>>,
+    pub tree: DeviceTree,
+    pub pids: BTreeMap<usize, DeviceId>, // driver_badge -> node_id
+    pub irqs: BTreeMap<usize, DeviceId>, // irq_num -> node_id
+    pub irq_caps: BTreeMap<usize, CapPtr>,
+    pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
 }
 
 impl<'a> UnicornManager<'a> {
@@ -41,9 +41,11 @@ impl<'a> UnicornManager<'a> {
             res_client,
             proc_client,
             config: Manifest::new(),
-            nodes: Vec::new(),
+            tree: DeviceTree::new(),
             pids: BTreeMap::new(),
-            platform: None,
+            irqs: BTreeMap::new(),
+            irq_caps: BTreeMap::new(),
+            mmio_caps: BTreeMap::new(),
         }
     }
 }

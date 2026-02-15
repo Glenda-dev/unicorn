@@ -1,9 +1,8 @@
+use crate::UnicornManager;
 use crate::layout::{
-    BOOTINFO_ADDR, BOOTINFO_SLOT, IRQ_SLOT, MANIFEST_SLOT, MMIO_SLOT, PLATFORM_ADDR, PLATFORM_SLOT,
-    RESOURCE_ADDR,
+    BOOTINFO_ADDR, BOOTINFO_SLOT, IRQ_SLOT, MANIFEST_SLOT, MMIO_SLOT, RESOURCE_ADDR,
 };
 use crate::log;
-use crate::UnicornManager;
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
@@ -11,9 +10,8 @@ use glenda::interface::{DeviceService, MemoryService, ResourceService, SystemSer
 use glenda::ipc::server::{handle_call, handle_cap_call};
 use glenda::ipc::{Badge, MsgTag, UTCB};
 use glenda::protocol::device;
-use glenda::protocol::resource::{ResourceType, DEVICE_ENDPOINT};
-use glenda::protocol::DEVICE_PROTO;
-use glenda::utils::platform::{PlatformInfo, PLATFORM_INFO_PAGES};
+use glenda::protocol::resource::{DEVICE_ENDPOINT, ResourceType};
+use glenda::protocol::{self, DEVICE_PROTO};
 
 impl<'a> SystemService for UnicornManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
@@ -29,31 +27,6 @@ impl<'a> SystemService for UnicornManager<'a> {
         let frame =
             self.res_client.get_cap(Badge::null(), ResourceType::Bootinfo, 0, BOOTINFO_SLOT)?;
         self.res_client.mmap(Badge::null(), Frame::from(frame), BOOTINFO_ADDR, PGSIZE)?;
-
-        log!("Loading PlatformInfo ...");
-        let frame =
-            self.res_client.get_cap(Badge::null(), ResourceType::Platform, 0, PLATFORM_SLOT)?;
-        self.res_client.mmap(
-            Badge::null(),
-            Frame::from(frame),
-            PLATFORM_ADDR,
-            PLATFORM_INFO_PAGES * PGSIZE,
-        )?;
-
-        let platform = unsafe {
-            let layout = core::alloc::Layout::new::<PlatformInfo>();
-            let ptr = alloc::alloc::alloc(layout) as *mut PlatformInfo;
-            if ptr.is_null() {
-                return Err(Error::OutOfMemory);
-            }
-            core::ptr::copy_nonoverlapping(PLATFORM_ADDR as *const PlatformInfo, ptr, 1);
-            alloc::boxed::Box::from_raw(ptr)
-        };
-        log!("Platform: {}", platform.model());
-        self.platform = Some(platform);
-
-        // Unmap raw platform info
-        self.res_client.munmap(Badge::null(), PLATFORM_ADDR, PLATFORM_INFO_PAGES * PGSIZE)?;
 
         // Get MMIO and IRQ capabilities (CNode)
         self.res_client.get_cap(Badge::null(), ResourceType::Mmio, 0, MMIO_SLOT)?;
@@ -124,25 +97,34 @@ impl<'a> SystemService for UnicornManager<'a> {
 
         glenda::ipc_dispatch! {
             self, utcb,
-            (DEVICE_PROTO, device::GET_DESC) => |s: &mut Self, u: &mut UTCB| {
+            (protocol::KERNEL_PROTO, protocol::kernel::NOTIFY) => |s: &mut Self, u: &mut UTCB| {
+                let irq = u.get_badge().bits();
+                s.handle_irq(irq)
+            },
+            (DEVICE_PROTO, device::REPORT) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
-                    let node_idx = *s.pids.get(&badge.bits()).ok_or(Error::PermissionDenied)?;
-                    let node = &s.nodes[node_idx];
-                    unsafe { u.write_postcard(node)? };
-                    Ok(())
+                    let desc = unsafe { u.read_postcard()? };
+                    s.report(badge, desc)
                 })
             },
             (DEVICE_PROTO, device::GET_MMIO) => |s: &mut Self, u: &mut UTCB| {
-                handle_cap_call(u, |_u| {
-                    let frame = s.get_mmio(badge)?;
+                handle_cap_call(u, |u| {
+                    let id = u.get_mr(0);
+                    let (frame, paddr, size) = s.get_mmio(badge, id)?;
+                    u.set_mr(0, paddr);
+                    u.set_mr(1, size);
                     Ok(frame.cap())
                 })
             },
             (DEVICE_PROTO, device::GET_IRQ) => |s: &mut Self, u: &mut UTCB| {
-                handle_cap_call(u, |_u| {
-                    let handler = s.get_irq(badge)?;
+                handle_cap_call(u, |u| {
+                    let id = u.get_mr(0);
+                    let handler = s.get_irq(badge, id)?;
                     Ok(handler.cap())
                 })
+            },
+            (DEVICE_PROTO, device::SCAN_PLATFORM) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |_| s.scan_platform(badge))
             },
         }
     }
@@ -153,5 +135,18 @@ impl<'a> SystemService for UnicornManager<'a> {
 
     fn stop(&mut self) {
         self.running = false;
+    }
+}
+
+impl<'a> UnicornManager<'a> {
+    pub fn handle_irq(&mut self, irq: usize) -> Result<(), Error> {
+        if let Some(&slot) = self.irq_caps.get(&irq) {
+            let handler = glenda::cap::IrqHandler::from(slot);
+            log!("IRQ {} received", irq);
+            handler.ack()?;
+        } else {
+            log!("Unknown IRQ notification: {}", irq);
+        }
+        Ok(())
     }
 }
