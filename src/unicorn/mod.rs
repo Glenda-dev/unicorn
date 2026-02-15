@@ -1,7 +1,7 @@
 use crate::config::Manifest;
+use crate::log;
 use crate::unicorn::platform::{DeviceId, DeviceState, DeviceTree};
-use alloc;
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -66,7 +66,7 @@ impl<'a> UnicornManager<'a> {
             _ => return Ok(()),
         };
 
-        crate::log!("Initializing root platform: {}", name);
+        log!("Initializing root platform: {}", name);
 
         let root_desc = DeviceDesc {
             name: String::from(name),
@@ -74,34 +74,7 @@ impl<'a> UnicornManager<'a> {
             mmio: alloc::vec![MMIORegion { base_addr: addr, size }],
             irq: Vec::new(),
         };
-
-        let root_id = self.tree.insert(None, root_desc)?;
-        self.start_driver(root_id)
-    }
-
-    pub fn scan_platform(&mut self, _badge: Badge) -> Result<(), Error> {
-        // BFS traversal to find ready nodes
-        let mut queue = VecDeque::new();
-        if let Some(root) = self.tree.root {
-             queue.push_back(root);
-        }
-
-        while let Some(id) = queue.pop_front() {
-             // 1. Check if node needs driver
-             let (needs_start, children) = if let Some(node) = self.tree.get_node(id) {
-                 (node.state == DeviceState::Ready, node.children.clone())
-             } else {
-                 (false, alloc::vec![])
-             };
-             
-             if needs_start {
-                 let _ = self.start_driver(id);
-             }
-             
-             for child in children {
-                 queue.push_back(child);
-             }
-        }
+        self.tree.insert(None, root_desc)?;
         Ok(())
     }
 
@@ -118,17 +91,17 @@ impl<'a> UnicornManager<'a> {
         // 2. Match driver
         // Simplified matching: check by name or compatible string for now
         // In real world, use PCI ID / Compatible string
-        
+
         let drv_binary = if let Some(bin) = self.match_driver(&drv_name) {
             bin.to_string()
         } else {
             // No driver found, ignore
             return Ok(());
         };
-        
-        crate::log!("Checking driver for device: {}", drv_name);
-        crate::log!("Starting driver {} for device {}", drv_binary, drv_name);
-        
+
+        log!("Checking driver for device: {}", drv_name);
+        log!("Starting driver {} for device {}", drv_binary, drv_name);
+
         match self.proc_client.spawn(Badge::null(), &drv_binary) {
             Ok(pid) => {
                 let node = self.tree.get_node_mut(id).ok_or(Error::InvalidArgs)?;
@@ -138,7 +111,7 @@ impl<'a> UnicornManager<'a> {
             }
             Err(e) => {
                 let node = self.tree.get_node_mut(id).ok_or(Error::InvalidArgs)?;
-                crate::log!("Failed to spawn driver {}: {:?}", drv_binary, e);
+                log!("Failed to spawn driver {}: {:?}", drv_binary, e);
                 node.state = DeviceState::Error;
                 Err(e)
             }

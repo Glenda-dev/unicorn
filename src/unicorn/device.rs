@@ -1,9 +1,10 @@
+use super::DeviceState;
 use crate::unicorn::UnicornManager;
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::cap::{Frame, IrqHandler};
 use glenda::error::Error;
-use glenda::interface::DeviceService;
-use glenda::interface::ResourceService;
+use glenda::interface::{DeviceService, ResourceService};
 use glenda::ipc::Badge;
 use glenda::protocol::device::DeviceDescNode;
 use glenda::protocol::resource::ResourceType;
@@ -11,8 +12,29 @@ use glenda::utils::manager::{CSpaceService, NullProvider};
 
 impl<'a> DeviceService for UnicornManager<'a> {
     fn scan_platform(&mut self, _badge: Badge) -> Result<(), Error> {
-        // Simple helper to trigger scan
-        UnicornManager::scan_platform(self, _badge)
+        // BFS traversal to find ready nodes
+        let mut queue = VecDeque::new();
+        if let Some(root) = self.tree.root {
+            queue.push_back(root);
+        }
+
+        while let Some(id) = queue.pop_front() {
+            // 1. Check if node needs driver
+            let (needs_start, children) = if let Some(node) = self.tree.get_node(id) {
+                (node.state == DeviceState::Ready, node.children.clone())
+            } else {
+                (false, alloc::vec![])
+            };
+
+            if needs_start {
+                let _ = self.start_driver(id);
+            }
+
+            for child in children {
+                queue.push_back(child);
+            }
+        }
+        Ok(())
     }
 
     fn get_mmio(&mut self, badge: Badge, id: usize) -> Result<(Frame, usize, usize), Error> {
