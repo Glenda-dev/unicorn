@@ -35,8 +35,6 @@ impl<'a> SystemService for UnicornManager<'a> {
 
         // Get MMIO and IRQ capabilities (CNode)
         self.scan_platform(Badge::null())?;
-
-        self.print_tree();
         Ok(())
     }
 
@@ -111,6 +109,12 @@ impl<'a> SystemService for UnicornManager<'a> {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
                     s.report(badge, desc)
+                })
+            },
+            (DEVICE_PROTO, device::UPDATE) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let compatible = unsafe { u.read_postcard()? };
+                    s.update(badge, compatible)
                 })
             },
             (DEVICE_PROTO, device::GET_MMIO) => |s: &mut Self, u: &mut UTCB| {

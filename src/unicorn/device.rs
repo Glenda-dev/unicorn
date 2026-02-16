@@ -1,4 +1,5 @@
 use super::DeviceState;
+use super::platform::DeviceId;
 use crate::layout::MMIO_CAP;
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
@@ -12,13 +13,11 @@ use glenda::protocol::device::DeviceDescNode;
 use glenda::protocol::resource::ResourceType;
 use glenda::utils::manager::CSpaceService;
 
-impl<'a> DeviceService for UnicornManager<'a> {
-    fn scan_platform(&mut self, _badge: Badge) -> Result<(), Error> {
-        // BFS traversal to find ready nodes
+impl<'a> UnicornManager<'a> {
+    fn scan_subtree(&mut self, start_id: DeviceId) -> Result<(), Error> {
+        // BFS traversal to find ready nodes starting from a specific node
         let mut queue = VecDeque::new();
-        if let Some(root) = self.tree.root {
-            queue.push_back(root);
-        }
+        queue.push_back(start_id);
 
         while let Some(id) = queue.pop_front() {
             // 1. Check if node needs driver
@@ -36,8 +35,13 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 queue.push_back(child);
             }
         }
-        self.tree.print();
         Ok(())
+    }
+}
+
+impl<'a> DeviceService for UnicornManager<'a> {
+    fn scan_platform(&mut self, _badge: Badge) -> Result<(), Error> {
+        if let Some(root) = self.tree.root { self.scan_subtree(root) } else { Ok(()) }
     }
 
     fn get_mmio(&mut self, badge: Badge, id: usize) -> Result<(Frame, usize, usize), Error> {
@@ -101,7 +105,24 @@ impl<'a> DeviceService for UnicornManager<'a> {
         if let Some(&node_id) = self.pids.get(&driver_id) {
             self.tree.mount_subtree(node_id, desc)?;
             // Automatically scan to start drivers for new devices
-            UnicornManager::scan_platform(self, Badge::null())
+            self.scan_subtree(node_id)
+        } else {
+            Err(Error::InvalidArgs)
+        }
+    }
+
+    fn update(
+        &mut self,
+        badge: Badge,
+        compatible: Vec<alloc::string::String>,
+    ) -> Result<(), Error> {
+        let driver_id = badge.bits();
+        if let Some(node_id) = self.pids.remove(&driver_id) {
+            let node = self.tree.get_node_mut(node_id).ok_or(Error::InvalidArgs)?;
+            node.desc.compatible = compatible;
+            node.state = super::DeviceState::Ready;
+            // Scan to start the new driver
+            self.scan_subtree(node_id)
         } else {
             Err(Error::InvalidArgs)
         }

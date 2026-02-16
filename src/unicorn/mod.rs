@@ -77,11 +77,6 @@ impl<'a> UnicornManager<'a> {
         self.tree.insert(None, root_desc)?;
         Ok(())
     }
-
-    pub fn print_tree(&self) {
-        self.tree.print();
-    }
-
     fn start_driver(&mut self, id: DeviceId) -> Result<(), Error> {
         // 1. Get Node and clone name to release borrow
         let (drv_name, drv_compat) = {
