@@ -83,21 +83,6 @@ impl<'a> SystemService for UnicornManager<'a> {
 
     fn dispatch(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
         let badge = utcb.get_badge();
-        let tag = utcb.get_msg_tag();
-        let label = tag.label();
-        let proto = tag.proto();
-        let flags = tag.flags();
-        let mrs = utcb.get_mrs();
-        let size = utcb.get_size();
-        log!(
-            "Received message: badge={}, label={:#x}, proto={:#x}, flags={}, utcb.mrs_regs={:?}, size={}",
-            badge,
-            label,
-            proto,
-            flags,
-            mrs,
-            size
-        );
 
         glenda::ipc_dispatch! {
             self, utcb,
