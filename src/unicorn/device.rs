@@ -1,14 +1,16 @@
 use super::DeviceState;
+use crate::layout::MMIO_CAP;
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use glenda::arch::mem::PGSIZE;
 use glenda::cap::{Frame, IrqHandler};
 use glenda::error::Error;
 use glenda::interface::{DeviceService, ResourceService};
 use glenda::ipc::Badge;
 use glenda::protocol::device::DeviceDescNode;
 use glenda::protocol::resource::ResourceType;
-use glenda::utils::manager::{CSpaceService, NullProvider};
+use glenda::utils::manager::CSpaceService;
 
 impl<'a> DeviceService for UnicornManager<'a> {
     fn scan_platform(&mut self, _badge: Badge) -> Result<(), Error> {
@@ -34,6 +36,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 queue.push_back(child);
             }
         }
+        self.tree.print();
         Ok(())
     }
 
@@ -42,22 +45,31 @@ impl<'a> DeviceService for UnicornManager<'a> {
         let driver_id = badge.bits();
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
-        let (base_addr, size) = {
+        let (base_addr, size, name) = {
             let node = self.tree.get_node(node_id).ok_or(Error::InvalidArgs)?;
             if id >= node.desc.mmio.len() {
                 return Err(Error::InvalidArgs);
             }
             let region = &node.desc.mmio[id];
-            (region.base_addr, region.size)
+            (region.base_addr, region.size, node.desc.name.clone())
         };
 
         // 2. Alloc slot for the MMIO capability
-        let mut null = NullProvider;
-        let slot = self.cspace_mgr.alloc(&mut null)?;
+        let slot = self.cspace_mgr.alloc(self.res_client)?;
 
-        // 3. Request MMIO capability from Resource Manager
-        // Note: ResourceType::Mmio treats `id` as physical address
-        self.res_client.get_cap(Badge::new(driver_id), ResourceType::Mmio, base_addr, slot)?;
+        // 3. Request MMIO capability
+        if name == "dtb" || name == "acpi" {
+            // For platform drivers, request from resource manager (kernel/warren)
+            self.res_client.get_cap(Badge::new(driver_id), ResourceType::Mmio, base_addr, slot)?;
+        } else {
+            // For other drivers, slice from our MMIO cap
+            let pages = (size + PGSIZE - 1) / PGSIZE;
+
+            // Check if we already have it?
+            // Ideally we should cache, but for now just mint new frame.
+            // MMIO_CAP is our handle to the IO Space. We slice it.
+            MMIO_CAP.get_frame(base_addr, pages, slot)?;
+        }
 
         Ok((Frame::from(slot), base_addr, size))
     }
@@ -76,8 +88,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
         };
 
         // 2. Alloc slot for IRQ capability
-        let mut null = NullProvider;
-        let slot = self.cspace_mgr.alloc(&mut null)?;
+        let slot = self.cspace_mgr.alloc(self.res_client)?;
 
         // 3. Request IRQ capability from Resource Manager
         self.res_client.get_cap(Badge::new(driver_id), ResourceType::Irq, irq_num, slot)?;

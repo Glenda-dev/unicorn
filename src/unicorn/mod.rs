@@ -78,21 +78,25 @@ impl<'a> UnicornManager<'a> {
         Ok(())
     }
 
+    pub fn print_tree(&self) {
+        self.tree.print();
+    }
+
     fn start_driver(&mut self, id: DeviceId) -> Result<(), Error> {
         // 1. Get Node and clone name to release borrow
-        let drv_name = {
+        let (drv_name, drv_compat) = {
             let node_ref = self.tree.get_node(id).ok_or(Error::InvalidArgs)?;
             if node_ref.state != DeviceState::Ready {
                 return Ok(());
             }
-            node_ref.desc.name.clone()
+            (node_ref.desc.name.clone(), node_ref.desc.compatible.clone())
         };
 
         // 2. Match driver
         // Simplified matching: check by name or compatible string for now
         // In real world, use PCI ID / Compatible string
 
-        let drv_binary = if let Some(bin) = self.match_driver(&drv_name) {
+        let drv_binary = if let Some(bin) = self.match_driver(&drv_name, &drv_compat) {
             bin.to_string()
         } else {
             // No driver found, ignore
@@ -118,13 +122,19 @@ impl<'a> UnicornManager<'a> {
         }
     }
 
-    fn match_driver(&self, dev_name: &str) -> Option<&str> {
+    fn match_driver(&self, dev_name: &str, dev_compat: &[String]) -> Option<&str> {
         // Iterate over manifest drivers
         for drv in &self.config.drivers {
             // Simple match: if driver name matches device name
             // Or if driver handles the "device_name"
             if drv.compatible.iter().any(|c| c == dev_name) {
                 return Some(&drv.name);
+            }
+            // Check if driver matches any of the device's compatible strings
+            for dc in dev_compat {
+                if drv.compatible.iter().any(|c| c == dc) {
+                    return Some(&drv.name);
+                }
             }
         }
         None

@@ -34,7 +34,10 @@ impl<'a> SystemService for UnicornManager<'a> {
         self.init_root_platform()?;
 
         // Get MMIO and IRQ capabilities (CNode)
-        self.scan_platform(Badge::null())
+        self.scan_platform(Badge::null())?;
+
+        self.print_tree();
+        Ok(())
     }
 
     fn listen(&mut self, ep: Endpoint, reply: CapPtr, recv: CapPtr) -> Result<(), Error> {

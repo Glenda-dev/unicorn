@@ -105,6 +105,66 @@ impl DeviceTree {
     pub fn contains(&self, id: DeviceId) -> bool {
         self.get_node(id).is_some()
     }
+
+    pub fn print(&self) {
+        if let Some(root) = self.root {
+            log!("Device Tree Dump:");
+            self.print_recursive(root, 0);
+        } else {
+            log!("Device Tree is Empty.");
+        }
+    }
+
+    fn print_recursive(&self, id: DeviceId, level: usize) {
+        if let Some(node) = self.get_node(id) {
+            let indent = "  ".repeat(level);
+            // Print basic info: name, type, and status
+            let status = match node.state {
+                DeviceState::Running => "RUNNING",
+                DeviceState::Ready => "READY",
+                DeviceState::Error => "ERROR",
+            };
+
+            // Format resource info if any
+            let mut res_info = alloc::string::String::new();
+            if !node.desc.mmio.is_empty() {
+                res_info.push_str(" MMIO:[");
+                for (i, reg) in node.desc.mmio.iter().enumerate() {
+                    if i > 0 {
+                        res_info.push_str(", ");
+                    }
+                    res_info.push_str(&alloc::format!(
+                        "{:#x}-{:#x}",
+                        reg.base_addr,
+                        reg.base_addr + reg.size
+                    ));
+                }
+                res_info.push(']');
+            }
+            if !node.desc.irq.is_empty() {
+                res_info.push_str(" IRQ:[");
+                for (i, irq) in node.desc.irq.iter().enumerate() {
+                    if i > 0 {
+                        res_info.push_str(", ");
+                    }
+                    res_info.push_str(&alloc::format!("{}", irq));
+                }
+                res_info.push(']');
+            }
+
+            let compat = if node.desc.compatible.is_empty() {
+                alloc::string::String::from("Unknown")
+            } else {
+                node.desc.compatible.join(", ")
+            };
+
+            log!("{} - {} ({}) [{}] {}", indent, node.desc.name, compat, status, res_info);
+
+            for child in &node.children {
+                self.print_recursive(*child, level + 1);
+            }
+        }
+    }
 }
 
 use glenda::protocol::device::DeviceDescNode;
