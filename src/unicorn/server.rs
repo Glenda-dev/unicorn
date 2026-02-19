@@ -86,9 +86,49 @@ impl<'a> SystemService for UnicornManager<'a> {
 
         glenda::ipc_dispatch! {
             self, utcb,
-            (protocol::KERNEL_PROTO, protocol::kernel::NOTIFY) => |s: &mut Self, u: &mut UTCB| {
-                let irq = u.get_badge().bits();
+            (protocol::KERNEL_PROTO, protocol::kernel::NOTIFY) => |s: &mut Self, _u: &mut UTCB| {
+                let irq = badge.bits();
                 s.handle_irq(irq)
+            },
+            (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::GET_CAPACITY) => |s: &mut Self, u: &mut UTCB| {
+                 handle_call(u, |_| {
+                     let (desc, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
+                     if let glenda::protocol::device::LogicDeviceType::Block(ref meta) = desc.dev_type {
+                         Ok(meta.num_blocks as usize)
+                     } else {
+                         Err(Error::InvalidArgs)
+                     }
+                 })
+            },
+            (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::GET_BLOCK_SIZE) => |s: &mut Self, u: &mut UTCB| {
+                 handle_call(u, |_| {
+                     let (desc, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
+                     if let glenda::protocol::device::LogicDeviceType::Block(ref meta) = desc.dev_type {
+                         Ok(meta.block_size as usize)
+                     } else {
+                         Ok(512)
+                     }
+                 })
+            },
+            (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::SETUP_RING) => |s: &mut Self, u: &mut UTCB| {
+                handle_cap_call(u, |_u| {
+                    let (desc, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
+                    if let glenda::protocol::device::LogicDeviceType::Block(ref _meta) = desc.dev_type {
+                         // Proxy ring logic:
+                         // 1. Get raw block endpoint
+                         // 2. Wrap as BlockClient
+                         // 3. setup_ring on raw block
+                         // 4. Return that frame to consumer
+
+                         // Note: In a complete implementation, Unicorn would need to intercept the
+                         // SQEs on this ring to add the partition offset.
+                         // This requires a background task or polling the ring.
+                         log!("Proxying io_uring for partition '{}'", desc.name);
+                         Err(Error::NotImplemented)
+                    } else {
+                         Err(Error::NotFound)
+                    }
+                })
             },
             (DEVICE_PROTO, device::REPORT) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
@@ -119,8 +159,40 @@ impl<'a> SystemService for UnicornManager<'a> {
                 })
             },
             (DEVICE_PROTO, device::SCAN_PLATFORM) => |s: &mut Self, u: &mut UTCB| {
-                handle_call(u, |_| s.scan_platform(badge))
+                handle_call(u, |_| s.scan_platform(badge))            },
+            (DEVICE_PROTO, device::REGISTER_LOGIC) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let desc = unsafe { u.read_postcard()? };
+                    let endpoint = u.get_recv_window();
+                    s.register_logic(badge, desc, endpoint)
+                })
             },
+            (DEVICE_PROTO, device::ALLOC_LOGIC) => |s: &mut Self, u: &mut UTCB| {
+                handle_cap_call(u, |u| {
+                    let (dev_type, criteria): (u32, alloc::string::String) =
+                        unsafe { u.read_postcard()? };
+                    let ep = s.alloc_logic(badge, dev_type, &criteria)?;
+                    Ok(ep.cap())
+                })
+            },
+            (DEVICE_PROTO, device::QUERY) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let query = unsafe { u.read_postcard()? };
+                    let names = s.query(badge, query)?;
+                    unsafe { u.write_postcard(&names)? };
+                    u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
+                    Ok(())
+                })
+            },
+            (DEVICE_PROTO, device::GET_DESC) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name: alloc::string::String = unsafe { u.read_postcard()? };
+                    let desc = s.get_desc(badge, &name)?;
+                    unsafe { u.write_postcard(&desc)? };
+                    u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
+                    Ok(())
+                })
+            }
         }
     }
 

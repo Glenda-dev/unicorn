@@ -11,11 +11,12 @@ use glenda::client::ResourceClient;
 use glenda::error::Error;
 use glenda::interface::ProcessService;
 use glenda::ipc::Badge;
-use glenda::protocol::device::{DeviceDesc, MMIORegion};
+use glenda::protocol::device::{DeviceDesc, LogicDeviceDesc, MMIORegion};
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::CSpaceManager;
 
 pub mod device;
+pub mod partition;
 pub mod platform;
 pub mod server;
 
@@ -33,6 +34,8 @@ pub struct UnicornManager<'a> {
     pub irqs: BTreeMap<usize, DeviceId>, // irq_num -> node_id
     pub irq_caps: BTreeMap<usize, CapPtr>,
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
+    pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr)>,
+    pub next_logic_id: usize,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -55,6 +58,8 @@ impl<'a> UnicornManager<'a> {
             irqs: BTreeMap::new(),
             irq_caps: BTreeMap::new(),
             mmio_caps: BTreeMap::new(),
+            logical_devices: BTreeMap::new(),
+            next_logic_id: 1,
         }
     }
 

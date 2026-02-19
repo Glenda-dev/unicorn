@@ -5,7 +5,7 @@ use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{Frame, IrqHandler};
+use glenda::cap::{Endpoint, Frame, IrqHandler, Rights};
 use glenda::error::Error;
 use glenda::interface::{DeviceService, ResourceService};
 use glenda::ipc::Badge;
@@ -36,6 +36,47 @@ impl<'a> UnicornManager<'a> {
             }
         }
         Ok(())
+    }
+
+    fn query_recursive(
+        &self,
+        id: DeviceId,
+        query: &glenda::protocol::device::DeviceQuery,
+        results: &mut Vec<alloc::string::String>,
+    ) {
+        if let Some(node) = self.tree.get_node(id) {
+            if query.compatible.is_empty() {
+                results.push(node.desc.name.clone());
+            } else {
+                for comp in &query.compatible {
+                    if node.desc.compatible.contains(comp) {
+                        results.push(node.desc.name.clone());
+                        break;
+                    }
+                }
+            }
+            for child in &node.children {
+                self.query_recursive(*child, query, results);
+            }
+        }
+    }
+
+    fn find_desc_recursive(
+        &self,
+        id: DeviceId,
+        name: &str,
+    ) -> Option<glenda::protocol::device::DeviceDesc> {
+        if let Some(node) = self.tree.get_node(id) {
+            if node.desc.name == name {
+                return Some(node.desc.clone());
+            }
+            for child in &node.children {
+                if let Some(desc) = self.find_desc_recursive(*child, name) {
+                    return Some(desc);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -126,5 +167,97 @@ impl<'a> DeviceService for UnicornManager<'a> {
         } else {
             Err(Error::InvalidArgs)
         }
+    }
+
+    fn register_logic(
+        &mut self,
+        _badge: Badge,
+        desc: glenda::protocol::device::LogicDeviceDesc,
+        endpoint: glenda::cap::CapPtr,
+    ) -> Result<(), Error> {
+        let is_raw_block =
+            matches!(desc.dev_type, glenda::protocol::device::LogicDeviceType::RawBlock(_));
+        let parent_name = desc.name.clone();
+
+        let id = self.next_logic_id;
+        self.next_logic_id += 1;
+
+        crate::log!("Registering logical device: {} -> {:?}", desc.name, endpoint);
+
+        // For raw devices, store the driver's endpoint directly.
+        self.logical_devices.insert(id, (desc.clone(), endpoint));
+
+        if is_raw_block {
+            crate::log!("Triggering partition probe for {}", parent_name);
+            let partitions = self.probe_partitions(Endpoint::from(endpoint), &parent_name)?;
+            for p_desc in partitions {
+                let p_idx = self.next_logic_id;
+                self.next_logic_id += 1;
+
+                // For sub-devices (partitions), mint a badged copy of Unicorn's own endpoint.
+                let slot = self.cspace_mgr.alloc(self.res_client)?;
+                self.cspace_mgr.root().mint(
+                    self.endpoint.cap(),
+                    slot,
+                    Badge::new(p_idx),
+                    Rights::ALL,
+                )?;
+
+                crate::log!("Registered logical proxy: {} (badge: {})", p_desc.name, p_idx);
+                self.logical_devices.insert(p_idx, (p_desc, slot));
+            }
+        }
+        Ok(())
+    }
+
+    fn alloc_logic(
+        &mut self,
+        _badge: Badge,
+        dev_type: u32,
+        criteria: &str,
+    ) -> Result<Endpoint, Error> {
+        // dev_type: 1=RawBlock, 2=Block, 3=Net, 4=Fb
+        for (_id, (desc, ep)) in self.logical_devices.iter() {
+            let matched = match (&desc.dev_type, dev_type) {
+                (glenda::protocol::device::LogicDeviceType::RawBlock(_), 1) => true,
+                (glenda::protocol::device::LogicDeviceType::Block(_), 2) => true,
+                (glenda::protocol::device::LogicDeviceType::Net, 3) => true,
+                (glenda::protocol::device::LogicDeviceType::Fb, 4) => true,
+                _ => false,
+            };
+            if matched && desc.name == criteria {
+                return Ok(Endpoint::from(ep.clone()));
+            }
+        }
+        Err(Error::NotFound)
+    }
+
+    fn query(
+        &mut self,
+        _badge: Badge,
+        query: glenda::protocol::device::DeviceQuery,
+    ) -> Result<Vec<alloc::string::String>, Error> {
+        let mut results = Vec::new();
+        if let Some(root) = self.tree.root {
+            self.query_recursive(root, &query, &mut results);
+        }
+        // Also add logical devices if no compatible filter is provided or matches name
+        for (_id, (desc, _ep)) in self.logical_devices.iter() {
+            if query.compatible.is_empty() {
+                results.push(desc.name.clone());
+            }
+        }
+        Ok(results)
+    }
+
+    fn get_desc(
+        &mut self,
+        _badge: Badge,
+        name: &str,
+    ) -> Result<glenda::protocol::device::DeviceDesc, Error> {
+        if let Some(root) = self.tree.root {
+            return self.find_desc_recursive(root, name).ok_or(Error::NotFound);
+        }
+        Err(Error::NotFound)
     }
 }
