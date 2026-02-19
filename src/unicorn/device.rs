@@ -1,6 +1,7 @@
 use super::DeviceState;
 use super::platform::DeviceId;
 use crate::layout::MMIO_CAP;
+use crate::log;
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -175,21 +176,72 @@ impl<'a> DeviceService for UnicornManager<'a> {
         desc: glenda::protocol::device::LogicDeviceDesc,
         endpoint: glenda::cap::CapPtr,
     ) -> Result<(), Error> {
-        let is_raw_block =
-            matches!(desc.dev_type, glenda::protocol::device::LogicDeviceType::RawBlock(_));
-        let parent_name = desc.name.clone();
+        log!("register_logic: input endpoint={:?}", endpoint);
+        let ep = if !endpoint.is_null() {
+            let slot = self.cspace_mgr.alloc(self.res_client)?;
+            self.cspace_mgr.root().move_cap(endpoint, slot)?;
+            slot
+        } else {
+            return Err(Error::InvalidArgs);
+        };
+
+        let name = match desc.dev_type {
+            glenda::protocol::device::LogicDeviceType::RawBlock(_) => {
+                let n = alloc::format!("disk{}", self.disk_count);
+                self.disk_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Net => {
+                let n = alloc::format!("net{}", self.net_count);
+                self.net_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Fb => {
+                let n = alloc::format!("fb{}", self.fb_count);
+                self.fb_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Uart => {
+                let n = alloc::format!("uart{}", self.uart_count);
+                self.uart_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Input => {
+                let n = alloc::format!("input{}", self.input_count);
+                self.input_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Gpio => {
+                let n = alloc::format!("gpio{}", self.gpio_count);
+                self.gpio_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Block(_) => {
+                let count = self
+                    .logical_devices
+                    .values()
+                    .filter(|(d, _, _)| {
+                        matches!(d.dev_type, glenda::protocol::device::LogicDeviceType::Block(_))
+                            && d.parent_name == desc.parent_name
+                    })
+                    .count();
+                alloc::format!("{}p{}", desc.parent_name, count + 1)
+            }
+        };
 
         let id = self.next_logic_id;
         self.next_logic_id += 1;
 
-        crate::log!("Registering logical device: {} -> {:?}", desc.name, endpoint);
+        log!("Registering logical device: {} -> {:?}", name, ep);
 
         // For raw devices, store the driver's endpoint directly.
-        self.logical_devices.insert(id, (desc.clone(), endpoint));
+        self.logical_devices.insert(id, (desc.clone(), ep, name.clone()));
 
-        if is_raw_block {
-            crate::log!("Triggering partition probe for {}", parent_name);
-            let partitions = self.probe_partitions(Endpoint::from(endpoint), &parent_name)?;
+        if let glenda::protocol::device::LogicDeviceType::RawBlock(_) = desc.dev_type {
+            log!("Triggering partition probe for {}", name);
+
+            let partitions = self.probe_partitions(Endpoint::from(ep), &name)?;
+
             for p_desc in partitions {
                 let p_idx = self.next_logic_id;
                 self.next_logic_id += 1;
@@ -203,8 +255,22 @@ impl<'a> DeviceService for UnicornManager<'a> {
                     Rights::ALL,
                 )?;
 
-                crate::log!("Registered logical proxy: {} (badge: {})", p_desc.name, p_idx);
-                self.logical_devices.insert(p_idx, (p_desc, slot));
+                let p_name = {
+                    let count = self
+                        .logical_devices
+                        .values()
+                        .filter(|(d, _, _)| {
+                            matches!(
+                                d.dev_type,
+                                glenda::protocol::device::LogicDeviceType::Block(_)
+                            ) && d.parent_name == p_desc.parent_name
+                        })
+                        .count();
+                    alloc::format!("{}p{}", p_desc.parent_name, count + 1)
+                };
+
+                log!("Registered logical proxy: {} (badge: {})", p_name, p_idx);
+                self.logical_devices.insert(p_idx, (p_desc, slot, p_name));
             }
         }
         Ok(())
@@ -217,15 +283,18 @@ impl<'a> DeviceService for UnicornManager<'a> {
         criteria: &str,
     ) -> Result<Endpoint, Error> {
         // dev_type: 1=RawBlock, 2=Block, 3=Net, 4=Fb
-        for (_id, (desc, ep)) in self.logical_devices.iter() {
+        for (_id, (desc, ep, name)) in self.logical_devices.iter() {
             let matched = match (&desc.dev_type, dev_type) {
                 (glenda::protocol::device::LogicDeviceType::RawBlock(_), 1) => true,
                 (glenda::protocol::device::LogicDeviceType::Block(_), 2) => true,
                 (glenda::protocol::device::LogicDeviceType::Net, 3) => true,
                 (glenda::protocol::device::LogicDeviceType::Fb, 4) => true,
+                (glenda::protocol::device::LogicDeviceType::Uart, 5) => true,
+                (glenda::protocol::device::LogicDeviceType::Input, 6) => true,
+                (glenda::protocol::device::LogicDeviceType::Gpio, 7) => true,
                 _ => false,
             };
-            if matched && desc.name == criteria {
+            if matched && name == criteria {
                 return Ok(Endpoint::from(ep.clone()));
             }
         }
@@ -242,9 +311,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
             self.query_recursive(root, &query, &mut results);
         }
         // Also add logical devices if no compatible filter is provided or matches name
-        for (_id, (desc, _ep)) in self.logical_devices.iter() {
+        for (_id, (_desc, _ep, name)) in self.logical_devices.iter() {
             if query.compatible.is_empty() {
-                results.push(desc.name.clone());
+                results.push(name.clone());
             }
         }
         Ok(results)

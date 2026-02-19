@@ -25,6 +25,12 @@ macro_rules! log {
         glenda::println!("{}Unicorn: {}{}", glenda::console::ANSI_BLUE, format_args!($($arg)*), glenda::console::ANSI_RESET);
     })
 }
+#[macro_export]
+macro_rules! error {
+    ($($arg:tt)*) => ({
+        glenda::println!("{}Unicorn: {}{}", glenda::console::ANSI_RED, format_args!($($arg)*), glenda::console::ANSI_RESET);
+    })
+}
 
 #[unsafe(no_mangle)]
 fn main() -> usize {

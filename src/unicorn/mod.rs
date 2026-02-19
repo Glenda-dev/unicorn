@@ -34,8 +34,14 @@ pub struct UnicornManager<'a> {
     pub irqs: BTreeMap<usize, DeviceId>, // irq_num -> node_id
     pub irq_caps: BTreeMap<usize, CapPtr>,
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
-    pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr)>,
+    pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr, String)>, // (desc, endpoint, name)
     pub next_logic_id: usize,
+    pub disk_count: usize,
+    pub net_count: usize,
+    pub fb_count: usize,
+    pub uart_count: usize,
+    pub input_count: usize,
+    pub gpio_count: usize,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -60,6 +66,12 @@ impl<'a> UnicornManager<'a> {
             mmio_caps: BTreeMap::new(),
             logical_devices: BTreeMap::new(),
             next_logic_id: 1,
+            disk_count: 0,
+            net_count: 0,
+            fb_count: 0,
+            uart_count: 0,
+            input_count: 0,
+            gpio_count: 0,
         }
     }
 
@@ -80,6 +92,33 @@ impl<'a> UnicornManager<'a> {
             irq: Vec::new(),
         };
         self.tree.insert(None, root_desc)?;
+        Ok(())
+    }
+
+    pub fn init_initrd_device(&mut self) -> Result<(), Error> {
+        let bootinfo = unsafe { &*(crate::layout::BOOTINFO_ADDR as *const BootInfo) };
+        if bootinfo.initrd_size == 0 {
+            return Ok(());
+        }
+
+        log!(
+            "Initializing Initrd Ramdisk device (paddr={:#x}, size={:#x})",
+            bootinfo.initrd_paddr,
+            bootinfo.initrd_size
+        );
+
+        let ramdisk_desc = DeviceDesc {
+            name: String::from("ramdisk"),
+            compatible: alloc::vec![String::from("ramdisk")],
+            mmio: alloc::vec![MMIORegion {
+                base_addr: bootinfo.initrd_paddr,
+                size: bootinfo.initrd_size,
+            }],
+            irq: Vec::new(),
+        };
+
+        // Add under root node
+        self.tree.insert(self.tree.root, ramdisk_desc)?;
         Ok(())
     }
     fn start_driver(&mut self, id: DeviceId) -> Result<(), Error> {

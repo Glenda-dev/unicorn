@@ -2,7 +2,7 @@ use crate::UnicornManager;
 use crate::layout::{
     BOOTINFO_ADDR, BOOTINFO_SLOT, IRQ_SLOT, MANIFEST_SLOT, MMIO_SLOT, RESOURCE_ADDR,
 };
-use crate::log;
+use crate::{error, log};
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
@@ -32,6 +32,7 @@ impl<'a> SystemService for UnicornManager<'a> {
         self.res_client.get_cap(Badge::null(), ResourceType::Irq, 0, IRQ_SLOT)?;
 
         self.init_root_platform()?;
+        self.init_initrd_device()?;
 
         // Get MMIO and IRQ capabilities (CNode)
         self.scan_platform(Badge::null())?;
@@ -71,7 +72,8 @@ impl<'a> SystemService for UnicornManager<'a> {
                 if e == Error::Success {
                     continue;
                 }
-                log!("Failed to dispatch message: {:?}", e);
+                let badge = utcb.get_badge();
+                error!("Failed to dispatch message for {}: {:?}", badge, e);
                 utcb.set_msg_tag(MsgTag::err());
                 utcb.set_mr(0, e as usize);
             }
@@ -92,7 +94,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::GET_CAPACITY) => |s: &mut Self, u: &mut UTCB| {
                  handle_call(u, |_| {
-                     let (desc, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
+                     let (desc, _, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
                      if let glenda::protocol::device::LogicDeviceType::Block(ref meta) = desc.dev_type {
                          Ok(meta.num_blocks as usize)
                      } else {
@@ -102,7 +104,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::GET_BLOCK_SIZE) => |s: &mut Self, u: &mut UTCB| {
                  handle_call(u, |_| {
-                     let (desc, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
+                     let (desc, _, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
                      if let glenda::protocol::device::LogicDeviceType::Block(ref meta) = desc.dev_type {
                          Ok(meta.block_size as usize)
                      } else {
@@ -112,7 +114,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::SETUP_RING) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |_u| {
-                    let (desc, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
+                    let (desc, _, name) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
                     if let glenda::protocol::device::LogicDeviceType::Block(ref _meta) = desc.dev_type {
                          // Proxy ring logic:
                          // 1. Get raw block endpoint
@@ -123,7 +125,7 @@ impl<'a> SystemService for UnicornManager<'a> {
                          // Note: In a complete implementation, Unicorn would need to intercept the
                          // SQEs on this ring to add the partition offset.
                          // This requires a background task or polling the ring.
-                         log!("Proxying io_uring for partition '{}'", desc.name);
+                         log!("Proxying io_uring for partition '{}'", name);
                          Err(Error::NotImplemented)
                     } else {
                          Err(Error::NotFound)
@@ -163,7 +165,12 @@ impl<'a> SystemService for UnicornManager<'a> {
             (DEVICE_PROTO, device::REGISTER_LOGIC) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
-                    let endpoint = u.get_recv_window();
+                    let tag = u.get_msg_tag();
+                    let endpoint = if tag.flags().contains(glenda::ipc::MsgFlags::HAS_CAP) {
+                        u.get_recv_window()
+                    } else {
+                        glenda::cap::CapPtr::null()
+                    };
                     s.register_logic(badge, desc, endpoint)
                 })
             },
