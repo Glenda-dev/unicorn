@@ -176,10 +176,16 @@ impl<'a> DeviceService for UnicornManager<'a> {
         desc: glenda::protocol::device::LogicDeviceDesc,
         endpoint: glenda::cap::CapPtr,
     ) -> Result<(), Error> {
-        log!("register_logic: input endpoint={:?}", endpoint);
         let ep = if !endpoint.is_null() {
             let slot = self.cspace_mgr.alloc(self.res_client)?;
-            self.cspace_mgr.root().move_cap(endpoint, slot)?;
+            if let Some(b) = desc.badge {
+                self.cspace_mgr.root().mint(endpoint, slot, Badge::new(b as usize), Rights::ALL)?;
+                // After minting a badged copy, we don't need the original cap?
+                // Actually the IPC moved the original cap to our recv slot.
+                // We should probably delete it or move it somewhere else.
+            } else {
+                self.cspace_mgr.root().move_cap(endpoint, slot)?;
+            }
             slot
         } else {
             return Err(Error::InvalidArgs);
@@ -214,6 +220,21 @@ impl<'a> DeviceService for UnicornManager<'a> {
             glenda::protocol::device::LogicDeviceType::Gpio => {
                 let n = alloc::format!("gpio{}", self.gpio_count);
                 self.gpio_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Platform => {
+                let n = alloc::format!("platform{}", self.platform_count);
+                self.platform_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Thermal => {
+                let n = alloc::format!("thermal{}", self.thermal_count);
+                self.thermal_count += 1;
+                n
+            }
+            glenda::protocol::device::LogicDeviceType::Battery => {
+                let n = alloc::format!("battery{}", self.battery_count);
+                self.battery_count += 1;
                 n
             }
             glenda::protocol::device::LogicDeviceType::Block(_) => {
@@ -283,7 +304,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
         criteria: &str,
     ) -> Result<Endpoint, Error> {
         // dev_type: 1=RawBlock, 2=Block, 3=Net, 4=Fb
-        for (_id, (desc, ep, name)) in self.logical_devices.iter() {
+        for (id, (desc, _ep, name)) in self.logical_devices.iter() {
             let matched = match (&desc.dev_type, dev_type) {
                 (glenda::protocol::device::LogicDeviceType::RawBlock(_), 1) => true,
                 (glenda::protocol::device::LogicDeviceType::Block(_), 2) => true,
@@ -292,10 +313,20 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 (glenda::protocol::device::LogicDeviceType::Uart, 5) => true,
                 (glenda::protocol::device::LogicDeviceType::Input, 6) => true,
                 (glenda::protocol::device::LogicDeviceType::Gpio, 7) => true,
+                (glenda::protocol::device::LogicDeviceType::Platform, 8) => true,
+                (glenda::protocol::device::LogicDeviceType::Thermal, 9) => true,
+                (glenda::protocol::device::LogicDeviceType::Battery, 10) => true,
                 _ => false,
             };
             if matched && name == criteria {
-                return Ok(Endpoint::from(ep.clone()));
+                let slot = self.cspace_mgr.alloc(self.res_client)?;
+                self.cspace_mgr.root().mint(
+                    self.endpoint.cap(),
+                    slot,
+                    Badge::new(*id),
+                    Rights::ALL,
+                )?;
+                return Ok(Endpoint::from(slot));
             }
         }
         Err(Error::NotFound)
@@ -328,5 +359,36 @@ impl<'a> DeviceService for UnicornManager<'a> {
             return self.find_desc_recursive(root, name).ok_or(Error::NotFound);
         }
         Err(Error::NotFound)
+    }
+}
+
+impl<'a> glenda::interface::ThermalService for UnicornManager<'a> {
+    fn get_thermal_zones(
+        &mut self,
+    ) -> Result<glenda::protocol::device::thermal::ThermalZones, Error> {
+        let mut all_zones = glenda::protocol::device::thermal::ThermalZones::default();
+        for (zones, _) in self.thermal_zones.values() {
+            all_zones.zones.extend(zones.zones.clone());
+        }
+        Ok(all_zones)
+    }
+
+    fn update_thermal_zones(
+        &mut self,
+        badge: Badge,
+        zones: glenda::protocol::device::thermal::ThermalZones,
+    ) -> Result<(), Error> {
+        let driver_id = badge.bits();
+        let node_name = if let Some(&node_id) = self.pids.get(&driver_id) {
+            self.tree
+                .get_node(node_id)
+                .map(|n| n.desc.name.clone())
+                .unwrap_or_else(|| "unknown".into())
+        } else {
+            "unknown".into()
+        };
+
+        self.thermal_zones.insert(driver_id, (zones, node_name));
+        Ok(())
     }
 }

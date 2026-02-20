@@ -68,6 +68,7 @@ impl<'a> UnicornManager<'a> {
                         num_blocks: capacity,
                         block_size: block_size.into(),
                     }),
+                    badge: None,
                 });
                 // Skip further MBR/GPT probing for initrd
                 self.res_client.munmap(Badge::null(), vaddr, PGSIZE)?;
@@ -115,6 +116,7 @@ impl<'a> UnicornManager<'a> {
                                             num_blocks: p.last_lba - p.first_lba + 1,
                                             block_size: block_size.into(),
                                         }),
+                                        badge: None,
                                     });
                                 }
                             }
@@ -132,6 +134,7 @@ impl<'a> UnicornManager<'a> {
                                     num_blocks: p.sectors_count as u64,
                                     block_size: block_size.into(),
                                 }),
+                                badge: None,
                             });
                         }
                     }
@@ -150,6 +153,7 @@ impl<'a> UnicornManager<'a> {
                     num_blocks: capacity,
                     block_size: block_size.into(),
                 }),
+                badge: None,
             });
         }
 

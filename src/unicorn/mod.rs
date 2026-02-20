@@ -35,6 +35,7 @@ pub struct UnicornManager<'a> {
     pub irq_caps: BTreeMap<usize, CapPtr>,
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
     pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr, String)>, // (desc, endpoint, name)
+    pub thermal_zones: BTreeMap<usize, (glenda::protocol::device::thermal::ThermalZones, String)>, // (zones, driver_name)
     pub next_logic_id: usize,
     pub disk_count: usize,
     pub net_count: usize,
@@ -42,6 +43,9 @@ pub struct UnicornManager<'a> {
     pub uart_count: usize,
     pub input_count: usize,
     pub gpio_count: usize,
+    pub platform_count: usize,
+    pub thermal_count: usize,
+    pub battery_count: usize,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -65,6 +69,7 @@ impl<'a> UnicornManager<'a> {
             irq_caps: BTreeMap::new(),
             mmio_caps: BTreeMap::new(),
             logical_devices: BTreeMap::new(),
+            thermal_zones: BTreeMap::new(),
             next_logic_id: 1,
             disk_count: 0,
             net_count: 0,
@@ -72,6 +77,9 @@ impl<'a> UnicornManager<'a> {
             uart_count: 0,
             input_count: 0,
             gpio_count: 0,
+            platform_count: 0,
+            thermal_count: 0,
+            battery_count: 0,
         }
     }
 

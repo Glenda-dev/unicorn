@@ -132,6 +132,26 @@ impl<'a> SystemService for UnicornManager<'a> {
                     }
                 })
             },
+            (glenda_drivers::protocol::PLATFORM_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
+                let badge = u.get_badge().bits();
+                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
+                Endpoint::from(*ep).call(u)
+            },
+            (glenda_drivers::protocol::THERMAL_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
+                let badge = u.get_badge().bits();
+                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
+                Endpoint::from(*ep).call(u)
+            },
+            (glenda_drivers::protocol::BATTERY_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
+                let badge = u.get_badge().bits();
+                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
+                Endpoint::from(*ep).call(u)
+            },
+            (glenda_drivers::protocol::ACPI_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
+                let badge = u.get_badge().bits();
+                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
+                Endpoint::from(*ep).call(u)
+            },
             (DEVICE_PROTO, device::REPORT) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
