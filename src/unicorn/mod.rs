@@ -1,5 +1,4 @@
 use crate::config::Manifest;
-use crate::log;
 use crate::unicorn::platform::{DeviceId, DeviceState, DeviceTree};
 use alloc::collections::BTreeMap;
 use alloc::string::String;

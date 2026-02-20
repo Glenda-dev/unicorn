@@ -1,4 +1,3 @@
-use crate::log;
 use crate::unicorn::UnicornManager;
 use crate::utils::gpt::{GPTHeader, GPTPartition};
 use crate::utils::mbr::MBR;

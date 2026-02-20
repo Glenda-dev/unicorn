@@ -1,7 +1,6 @@
 use super::DeviceState;
 use super::platform::DeviceId;
 use crate::layout::MMIO_CAP;
-use crate::log;
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;

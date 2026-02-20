@@ -2,7 +2,6 @@ use crate::UnicornManager;
 use crate::layout::{
     BOOTINFO_ADDR, BOOTINFO_SLOT, IRQ_SLOT, MANIFEST_SLOT, MMIO_SLOT, RESOURCE_ADDR,
 };
-use crate::{error, log};
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;

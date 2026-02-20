@@ -1,4 +1,3 @@
-use crate::log;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use glenda::error::Error;

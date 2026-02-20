@@ -2,8 +2,10 @@
 #![no_main]
 #![allow(dead_code)]
 
-extern crate alloc;
+#[macro_use]
+extern crate glenda;
 
+extern crate alloc;
 mod config;
 mod layout;
 mod unicorn;
@@ -19,21 +21,9 @@ use glenda::ipc::Badge;
 use glenda::utils::manager::CSpaceManager;
 use unicorn::UnicornManager;
 
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => ({
-        glenda::println!("{}Unicorn: {}{}", glenda::console::ANSI_BLUE, format_args!($($arg)*), glenda::console::ANSI_RESET);
-    })
-}
-#[macro_export]
-macro_rules! error {
-    ($($arg:tt)*) => ({
-        glenda::println!("{}Unicorn: {}{}", glenda::console::ANSI_RED, format_args!($($arg)*), glenda::console::ANSI_RESET);
-    })
-}
-
 #[unsafe(no_mangle)]
 fn main() -> usize {
+    glenda::console::init_logging("Unicorn");
     log!("Starting Unicorn Device Driver Manager...");
     let mut res_client = ResourceClient::new(MONITOR_CAP);
     let mut proc_client = ProcessClient::new(MONITOR_CAP);
