@@ -9,7 +9,6 @@ extern crate alloc;
 mod config;
 mod layout;
 mod unicorn;
-mod utils;
 
 use glenda::cap::CapType;
 use glenda::cap::{CSPACE_CAP, ENDPOINT_CAP, ENDPOINT_SLOT, MONITOR_CAP, RECV_SLOT, REPLY_SLOT};

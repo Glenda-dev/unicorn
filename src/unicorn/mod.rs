@@ -15,7 +15,6 @@ use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::CSpaceManager;
 
 pub mod device;
-pub mod partition;
 pub mod platform;
 pub mod server;
 
@@ -35,6 +34,7 @@ pub struct UnicornManager<'a> {
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
     pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr, String)>, // (desc, endpoint, name)
     pub thermal_zones: BTreeMap<usize, (glenda::protocol::device::thermal::ThermalZones, String)>, // (zones, driver_name)
+    pub hooks: Vec<(glenda::protocol::device::HookTarget, CapPtr)>,
     pub next_logic_id: usize,
     pub disk_count: usize,
     pub net_count: usize,
@@ -69,6 +69,7 @@ impl<'a> UnicornManager<'a> {
             mmio_caps: BTreeMap::new(),
             logical_devices: BTreeMap::new(),
             thermal_zones: BTreeMap::new(),
+            hooks: Vec::new(),
             next_logic_id: 1,
             disk_count: 0,
             net_count: 0,

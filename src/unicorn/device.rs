@@ -5,27 +5,31 @@ use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{Endpoint, Frame, IrqHandler, Rights};
+use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Rights};
 use glenda::error::Error;
 use glenda::interface::{DeviceService, ResourceService};
-use glenda::ipc::Badge;
-use glenda::protocol::device::DeviceDescNode;
+use glenda::ipc::{Badge, MsgFlags, MsgTag, UTCB};
+use glenda::protocol::DEVICE_PROTO;
+use glenda::protocol::device::{
+    self, DeviceDescNode, DeviceNotification, HookTarget, LogicDeviceDesc,
+};
 use glenda::protocol::resource::ResourceType;
 use glenda::utils::manager::CSpaceService;
 
 impl<'a> UnicornManager<'a> {
     fn scan_subtree(&mut self, start_id: DeviceId) -> Result<(), Error> {
-        // BFS traversal to find ready nodes starting from a specific node
         let mut queue = VecDeque::new();
         queue.push_back(start_id);
 
         while let Some(id) = queue.pop_front() {
-            // 1. Check if node needs driver
             let (needs_start, children) = if let Some(node) = self.tree.get_node(id) {
                 (node.state == DeviceState::Ready, node.children.clone())
             } else {
                 (false, alloc::vec![])
             };
+
+            // Trigger hooks for physical node discovery/update
+            self.trigger_hooks_for_node(id)?;
 
             if needs_start {
                 let _ = self.start_driver(id);
@@ -38,41 +42,67 @@ impl<'a> UnicornManager<'a> {
         Ok(())
     }
 
-    fn query_recursive(
-        &self,
-        id: DeviceId,
-        query: &glenda::protocol::device::DeviceQuery,
-        results: &mut Vec<alloc::string::String>,
-    ) {
-        if let Some(node) = self.tree.get_node(id) {
-            if query.compatible.is_empty() {
-                results.push(node.desc.name.clone());
-            } else {
-                for comp in &query.compatible {
-                    if node.desc.compatible.contains(comp) {
-                        results.push(node.desc.name.clone());
-                        break;
-                    }
-                }
-            }
-            for child in &node.children {
-                self.query_recursive(*child, query, results);
-            }
+    fn trigger_hooks_for_node(&mut self, node_id: DeviceId) -> Result<(), Error> {
+        let logic_ids = {
+            let node = self.tree.get_node(node_id).ok_or(Error::NotFound)?;
+            node.logical_devices.clone()
+        };
+
+        for logic_id in logic_ids {
+            self.trigger_hooks_for_logic(logic_id)?;
         }
+        Ok(())
     }
 
-    fn find_desc_recursive(
-        &self,
-        id: DeviceId,
-        name: &str,
-    ) -> Option<glenda::protocol::device::DeviceDesc> {
-        if let Some(node) = self.tree.get_node(id) {
-            if node.desc.name == name {
-                return Some(node.desc.clone());
+    fn trigger_hooks_for_logic(&mut self, logic_id: usize) -> Result<(), Error> {
+        let (desc, ep, name) =
+            self.logical_devices.get(&logic_id).cloned().ok_or(Error::NotFound)?;
+
+        let mut notify_eps = Vec::new();
+        for (target, hook_ep) in &self.hooks {
+            let notify = match target {
+                HookTarget::Endpoint(e) => *e == ep.bits() as u64,
+                HookTarget::Type(t) => {
+                    core::mem::discriminant(t) == core::mem::discriminant(&desc.dev_type)
+                }
+            };
+            if notify {
+                notify_eps.push(*hook_ep);
             }
-            for child in &node.children {
-                if let Some(desc) = self.find_desc_recursive(*child, name) {
-                    return Some(desc);
+        }
+
+        for hook_ep in notify_eps {
+            log!("Notifying hook {:?} about logic device {}", hook_ep, name);
+            let mut utcb = unsafe { UTCB::new() };
+            utcb.clear();
+            let note = DeviceNotification::Registered(logic_id as u64, desc.clone());
+            if let Ok(_) = unsafe { utcb.write_postcard(&note) } {
+                utcb.set_msg_tag(MsgTag::new(
+                    DEVICE_PROTO,
+                    device::UPDATE,
+                    MsgFlags::HAS_CAP | MsgFlags::HAS_BUFFER,
+                ));
+                let slot = self.cspace_mgr.alloc(self.res_client)?;
+                let _ = self.cspace_mgr.root().mint(ep, slot, Badge::new(logic_id), Rights::ALL);
+                utcb.set_cap_transfer(slot);
+                let _ = Endpoint::from(hook_ep).call(&mut utcb);
+            }
+        }
+        Ok(())
+    }
+
+    fn find_node_by_name(&self, name: &str) -> Option<DeviceId> {
+        if let Some(root) = self.tree.root {
+            let mut queue = VecDeque::new();
+            queue.push_back(root);
+            while let Some(id) = queue.pop_front() {
+                if let Some(node) = self.tree.get_node(id) {
+                    if node.desc.name == name {
+                        return Some(id);
+                    }
+                    for child in &node.children {
+                        queue.push_back(*child);
+                    }
                 }
             }
         }
@@ -86,7 +116,6 @@ impl<'a> DeviceService for UnicornManager<'a> {
     }
 
     fn get_mmio(&mut self, badge: Badge, id: usize) -> Result<(Frame, usize, usize), Error> {
-        // 1. Find device node by driver badge
         let driver_id = badge.bits();
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
@@ -99,29 +128,18 @@ impl<'a> DeviceService for UnicornManager<'a> {
             (region.base_addr, region.size, node.desc.name.clone())
         };
 
-        // 2. Alloc slot for the MMIO capability
         let slot = self.cspace_mgr.alloc(self.res_client)?;
-
-        // 3. Request MMIO capability
         if name == "dtb" || name == "acpi" {
-            // For platform drivers, request from resource manager (kernel/warren)
             self.res_client.get_cap(Badge::new(driver_id), ResourceType::Mmio, base_addr, slot)?;
         } else {
-            // For other drivers, slice from our MMIO cap
             let pages = (size + PGSIZE - 1) / PGSIZE;
-
-            // Check if we already have it?
-            // Ideally we should cache, but for now just mint new frame.
-            // MMIO_CAP is our handle to the IO Space. We slice it.
             MMIO_CAP.get_frame(base_addr, pages, slot)?;
         }
-
         Ok((Frame::from(slot), base_addr, size))
     }
 
     fn get_irq(&mut self, badge: Badge, id: usize) -> Result<IrqHandler, Error> {
         let driver_id = badge.bits();
-        // 1. Find device node by driver badge
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
         let irq_num = {
@@ -132,12 +150,8 @@ impl<'a> DeviceService for UnicornManager<'a> {
             node.desc.irq[id]
         };
 
-        // 2. Alloc slot for IRQ capability
         let slot = self.cspace_mgr.alloc(self.res_client)?;
-
-        // 3. Request IRQ capability from Resource Manager
         self.res_client.get_cap(Badge::new(driver_id), ResourceType::Irq, irq_num, slot)?;
-
         Ok(IrqHandler::from(slot))
     }
 
@@ -145,7 +159,6 @@ impl<'a> DeviceService for UnicornManager<'a> {
         let driver_id = badge.bits();
         if let Some(&node_id) = self.pids.get(&driver_id) {
             self.tree.mount_subtree(node_id, desc)?;
-            // Automatically scan to start drivers for new devices
             self.scan_subtree(node_id)
         } else {
             Err(Error::InvalidArgs)
@@ -159,10 +172,11 @@ impl<'a> DeviceService for UnicornManager<'a> {
     ) -> Result<(), Error> {
         let driver_id = badge.bits();
         if let Some(node_id) = self.pids.remove(&driver_id) {
-            let node = self.tree.get_node_mut(node_id).ok_or(Error::InvalidArgs)?;
-            node.desc.compatible = compatible;
-            node.state = super::DeviceState::Ready;
-            // Scan to start the new driver
+            {
+                let node = self.tree.get_node_mut(node_id).ok_or(Error::InvalidArgs)?;
+                node.desc.compatible = compatible;
+                node.state = super::DeviceState::Ready;
+            }
             self.scan_subtree(node_id)
         } else {
             Err(Error::InvalidArgs)
@@ -172,16 +186,13 @@ impl<'a> DeviceService for UnicornManager<'a> {
     fn register_logic(
         &mut self,
         _badge: Badge,
-        desc: glenda::protocol::device::LogicDeviceDesc,
-        endpoint: glenda::cap::CapPtr,
+        desc: LogicDeviceDesc,
+        endpoint: CapPtr,
     ) -> Result<(), Error> {
         let ep = if !endpoint.is_null() {
             let slot = self.cspace_mgr.alloc(self.res_client)?;
             if let Some(b) = desc.badge {
                 self.cspace_mgr.root().mint(endpoint, slot, Badge::new(b as usize), Rights::ALL)?;
-                // After minting a badged copy, we don't need the original cap?
-                // Actually the IPC moved the original cap to our recv slot.
-                // We should probably delete it or move it somewhere else.
             } else {
                 self.cspace_mgr.root().move_cap(endpoint, slot)?;
             }
@@ -191,109 +202,42 @@ impl<'a> DeviceService for UnicornManager<'a> {
         };
 
         let name = match desc.dev_type {
-            glenda::protocol::device::LogicDeviceType::RawBlock(_) => {
+            device::LogicDeviceType::RawBlock(_) => {
                 let n = alloc::format!("disk{}", self.disk_count);
                 self.disk_count += 1;
                 n
             }
-            glenda::protocol::device::LogicDeviceType::Net => {
-                let n = alloc::format!("net{}", self.net_count);
-                self.net_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Fb => {
-                let n = alloc::format!("fb{}", self.fb_count);
-                self.fb_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Uart => {
-                let n = alloc::format!("uart{}", self.uart_count);
-                self.uart_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Input => {
-                let n = alloc::format!("input{}", self.input_count);
-                self.input_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Gpio => {
-                let n = alloc::format!("gpio{}", self.gpio_count);
-                self.gpio_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Platform => {
-                let n = alloc::format!("platform{}", self.platform_count);
-                self.platform_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Thermal => {
-                let n = alloc::format!("thermal{}", self.thermal_count);
-                self.thermal_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Battery => {
-                let n = alloc::format!("battery{}", self.battery_count);
-                self.battery_count += 1;
-                n
-            }
-            glenda::protocol::device::LogicDeviceType::Block(_) => {
+            device::LogicDeviceType::Block(_) => {
                 let count = self
                     .logical_devices
                     .values()
                     .filter(|(d, _, _)| {
-                        matches!(d.dev_type, glenda::protocol::device::LogicDeviceType::Block(_))
+                        matches!(d.dev_type, device::LogicDeviceType::Block(_))
                             && d.parent_name == desc.parent_name
                     })
                     .count();
                 alloc::format!("{}p{}", desc.parent_name, count + 1)
             }
+            _ => {
+                let n = alloc::format!("logic{}", self.next_logic_id);
+                n
+            }
         };
+
+        log!("Registering logical device: {} -> {:?}", name, ep);
 
         let id = self.next_logic_id;
         self.next_logic_id += 1;
 
-        log!("Registering logical device: {} -> {:?}", name, ep);
-
-        // For raw devices, store the driver's endpoint directly.
         self.logical_devices.insert(id, (desc.clone(), ep, name.clone()));
 
-        if let glenda::protocol::device::LogicDeviceType::RawBlock(_) = desc.dev_type {
-            log!("Triggering partition probe for {}", name);
-
-            let partitions = self.probe_partitions(Endpoint::from(ep), &name)?;
-
-            for p_desc in partitions {
-                let p_idx = self.next_logic_id;
-                self.next_logic_id += 1;
-
-                // For sub-devices (partitions), mint a badged copy of Unicorn's own endpoint.
-                let slot = self.cspace_mgr.alloc(self.res_client)?;
-                self.cspace_mgr.root().mint(
-                    self.endpoint.cap(),
-                    slot,
-                    Badge::new(p_idx),
-                    Rights::ALL,
-                )?;
-
-                let p_name = {
-                    let count = self
-                        .logical_devices
-                        .values()
-                        .filter(|(d, _, _)| {
-                            matches!(
-                                d.dev_type,
-                                glenda::protocol::device::LogicDeviceType::Block(_)
-                            ) && d.parent_name == p_desc.parent_name
-                        })
-                        .count();
-                    alloc::format!("{}p{}", p_desc.parent_name, count + 1)
-                };
-
-                log!("Registered logical proxy: {} (badge: {})", p_name, p_idx);
-                self.logical_devices.insert(p_idx, (p_desc, slot, p_name));
+        if let Some(node_id) = self.find_node_by_name(&desc.parent_name) {
+            if let Some(node) = self.tree.get_node_mut(node_id) {
+                node.logical_devices.push(id);
             }
         }
-        Ok(())
+
+        self.trigger_hooks_for_logic(id)
     }
 
     fn alloc_logic(
@@ -302,19 +246,10 @@ impl<'a> DeviceService for UnicornManager<'a> {
         dev_type: u32,
         criteria: &str,
     ) -> Result<Endpoint, Error> {
-        // dev_type: 1=RawBlock, 2=Block, 3=Net, 4=Fb
         for (id, (desc, _ep, name)) in self.logical_devices.iter() {
             let matched = match (&desc.dev_type, dev_type) {
-                (glenda::protocol::device::LogicDeviceType::RawBlock(_), 1) => true,
-                (glenda::protocol::device::LogicDeviceType::Block(_), 2) => true,
-                (glenda::protocol::device::LogicDeviceType::Net, 3) => true,
-                (glenda::protocol::device::LogicDeviceType::Fb, 4) => true,
-                (glenda::protocol::device::LogicDeviceType::Uart, 5) => true,
-                (glenda::protocol::device::LogicDeviceType::Input, 6) => true,
-                (glenda::protocol::device::LogicDeviceType::Gpio, 7) => true,
-                (glenda::protocol::device::LogicDeviceType::Platform, 8) => true,
-                (glenda::protocol::device::LogicDeviceType::Thermal, 9) => true,
-                (glenda::protocol::device::LogicDeviceType::Battery, 10) => true,
+                (device::LogicDeviceType::RawBlock(_), 1) => true,
+                (device::LogicDeviceType::Block(_), 2) => true,
                 _ => false,
             };
             if matched && name == criteria {
@@ -334,60 +269,63 @@ impl<'a> DeviceService for UnicornManager<'a> {
     fn query(
         &mut self,
         _badge: Badge,
-        query: glenda::protocol::device::DeviceQuery,
+        query: device::DeviceQuery,
     ) -> Result<Vec<alloc::string::String>, Error> {
         let mut results = Vec::new();
-        if let Some(root) = self.tree.root {
-            self.query_recursive(root, &query, &mut results);
-        }
-        // Also add logical devices if no compatible filter is provided or matches name
         for (_id, (_desc, _ep, name)) in self.logical_devices.iter() {
-            if query.compatible.is_empty() {
+            if query.compatible.is_empty() || query.compatible.iter().any(|c| c == name) {
                 results.push(name.clone());
             }
         }
         Ok(results)
     }
 
-    fn get_desc(
-        &mut self,
-        _badge: Badge,
-        name: &str,
-    ) -> Result<glenda::protocol::device::DeviceDesc, Error> {
+    fn get_desc(&mut self, _badge: Badge, name: &str) -> Result<device::DeviceDesc, Error> {
         if let Some(root) = self.tree.root {
-            return self.find_desc_recursive(root, name).ok_or(Error::NotFound);
+            let mut queue = VecDeque::new();
+            queue.push_back(root);
+            while let Some(id) = queue.pop_front() {
+                if let Some(node) = self.tree.get_node(id) {
+                    if node.desc.name == name {
+                        return Ok(node.desc.clone());
+                    }
+                    for child in &node.children {
+                        queue.push_back(*child);
+                    }
+                }
+            }
         }
         Err(Error::NotFound)
     }
-}
 
-impl<'a> glenda::interface::ThermalService for UnicornManager<'a> {
-    fn get_thermal_zones(
+    fn get_logic_desc(
         &mut self,
-    ) -> Result<glenda::protocol::device::thermal::ThermalZones, Error> {
-        let mut all_zones = glenda::protocol::device::thermal::ThermalZones::default();
-        for (zones, _) in self.thermal_zones.values() {
-            all_zones.zones.extend(zones.zones.clone());
+        _badge: Badge,
+        name: &str,
+    ) -> Result<(u64, LogicDeviceDesc), Error> {
+        for (id, (desc, _ep, dev_name)) in self.logical_devices.iter() {
+            if dev_name == name {
+                return Ok((*id as u64, desc.clone()));
+            }
         }
-        Ok(all_zones)
+        Err(Error::NotFound)
     }
 
-    fn update_thermal_zones(
-        &mut self,
-        badge: Badge,
-        zones: glenda::protocol::device::thermal::ThermalZones,
-    ) -> Result<(), Error> {
-        let driver_id = badge.bits();
-        let node_name = if let Some(&node_id) = self.pids.get(&driver_id) {
-            self.tree
-                .get_node(node_id)
-                .map(|n| n.desc.name.clone())
-                .unwrap_or_else(|| "unknown".into())
-        } else {
-            "unknown".into()
-        };
+    fn hook(&mut self, _badge: Badge, target: HookTarget, endpoint: CapPtr) -> Result<(), Error> {
+        log!("Registering hook for target {:?} at endpoint {:?}", target, endpoint);
+        let slot = self.cspace_mgr.alloc(self.res_client)?;
+        self.cspace_mgr.root().move_cap(endpoint, slot)?;
+        self.hooks.push((target, slot));
 
-        self.thermal_zones.insert(driver_id, (zones, node_name));
+        let logic_ids: Vec<usize> = self.logical_devices.keys().cloned().collect();
+        for id in logic_ids {
+            let _ = self.trigger_hooks_for_logic(id);
+        }
+
         Ok(())
+    }
+
+    fn unhook(&mut self, _badge: Badge, _target: HookTarget) -> Result<(), Error> {
+        Err(Error::NotImplemented)
     }
 }

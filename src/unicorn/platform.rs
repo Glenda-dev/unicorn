@@ -15,8 +15,9 @@ pub struct DeviceNode {
     pub parent: Option<DeviceId>,
     pub children: Vec<DeviceId>, // 子节点列表
     pub id: DeviceId,
-    pub desc: DeviceDesc,   // 设备描述符
-    pub state: DeviceState, // 设备状态 (如已初始化、未初始化等)
+    pub desc: DeviceDesc,            // 设备描述符
+    pub state: DeviceState,          // 设备状态 (如已初始化、未初始化等)
+    pub logical_devices: Vec<usize>, // 逻辑设备列表
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,6 +69,7 @@ impl DeviceTree {
             id,
             desc,
             state: DeviceState::Ready,
+            logical_devices: Vec::new(),
         };
 
         self.nodes[idx as usize] = Some(node);

@@ -91,45 +91,10 @@ impl<'a> SystemService for UnicornManager<'a> {
                 let irq = badge.bits();
                 s.handle_irq(irq)
             },
-            (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::GET_CAPACITY) => |s: &mut Self, u: &mut UTCB| {
-                 handle_call(u, |_| {
-                     let (desc, _, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
-                     if let glenda::protocol::device::LogicDeviceType::Block(ref meta) = desc.dev_type {
-                         Ok(meta.num_blocks as usize)
-                     } else {
-                         Err(Error::InvalidArgs)
-                     }
-                 })
-            },
-            (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::GET_BLOCK_SIZE) => |s: &mut Self, u: &mut UTCB| {
-                 handle_call(u, |_| {
-                     let (desc, _, _) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
-                     if let glenda::protocol::device::LogicDeviceType::Block(ref meta) = desc.dev_type {
-                         Ok(meta.block_size as usize)
-                     } else {
-                         Ok(512)
-                     }
-                 })
-            },
-            (glenda_drivers::protocol::BLOCK_PROTO, glenda_drivers::protocol::block::SETUP_RING) => |s: &mut Self, u: &mut UTCB| {
-                handle_cap_call(u, |_u| {
-                    let (desc, _, name) = s.logical_devices.get(&badge.bits()).ok_or(Error::NotFound)?;
-                    if let glenda::protocol::device::LogicDeviceType::Block(ref _meta) = desc.dev_type {
-                         // Proxy ring logic:
-                         // 1. Get raw block endpoint
-                         // 2. Wrap as BlockClient
-                         // 3. setup_ring on raw block
-                         // 4. Return that frame to consumer
-
-                         // Note: In a complete implementation, Unicorn would need to intercept the
-                         // SQEs on this ring to add the partition offset.
-                         // This requires a background task or polling the ring.
-                         log!("Proxying io_uring for partition '{}'", name);
-                         Err(Error::NotImplemented)
-                    } else {
-                         Err(Error::NotFound)
-                    }
-                })
+            (glenda_drivers::protocol::BLOCK_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
+                let badge = u.get_badge().bits();
+                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
+                Endpoint::from(*ep).call(u)
             },
             (glenda_drivers::protocol::PLATFORM_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
                 let badge = u.get_badge().bits();
@@ -179,6 +144,30 @@ impl<'a> SystemService for UnicornManager<'a> {
                     Ok(handler.cap())
                 })
             },
+            (DEVICE_PROTO, device::GET_DESC) => |s: &mut Self, u: &mut UTCB| {
+                let name: alloc::string::String = unsafe { u.read_postcard()? };
+                let desc = s.get_desc(badge, &name)?;
+                unsafe { u.write_postcard(&desc)? };
+                u.set_msg_tag(MsgTag::new(
+                    glenda::protocol::DEVICE_PROTO,
+                    glenda::protocol::device::GET_DESC,
+                    glenda::ipc::MsgFlags::OK | glenda::ipc::MsgFlags::HAS_BUFFER,
+                ));
+                Ok(())
+            },
+            (DEVICE_PROTO, device::HOOK) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let target = unsafe { u.read_postcard()? };
+                    let endpoint = u.get_recv_window();
+                    s.hook(badge, target, endpoint)
+                })
+            },
+            (DEVICE_PROTO, device::UNHOOK) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let target = unsafe { u.read_postcard()? };
+                    s.unhook(badge, target)
+                })
+            },
             (DEVICE_PROTO, device::SCAN_PLATFORM) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |_| s.scan_platform(badge))            },
             (DEVICE_PROTO, device::REGISTER_LOGIC) => |s: &mut Self, u: &mut UTCB| {
@@ -218,7 +207,18 @@ impl<'a> SystemService for UnicornManager<'a> {
                     u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
                     Ok(())
                 })
-            }
+            },
+            (DEVICE_PROTO, device::GET_LOGIC_DESC) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name: alloc::string::String = unsafe { u.read_postcard()? };
+                    let (id, desc) = s.get_logic_desc(badge, &name)?;
+                    u.set_mr(0, id as usize);
+                    unsafe { u.write_postcard(&desc)? };
+                    u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
+                    Ok(())
+                })
+            },
+            (_, _) => |_,_| Err(Error::InvalidMethod)
         }
     }
 
