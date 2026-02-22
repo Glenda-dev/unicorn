@@ -5,10 +5,13 @@ use crate::layout::{
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
-use glenda::interface::{DeviceService, MemoryService, ResourceService, SystemService};
+use glenda::interface::{
+    DeviceService, InitService, MemoryService, ResourceService, SystemService,
+};
 use glenda::ipc::server::{handle_call, handle_cap_call};
 use glenda::ipc::{Badge, MsgTag, UTCB};
 use glenda::protocol::device;
+use glenda::protocol::init::ServiceState;
 use glenda::protocol::resource::{DEVICE_ENDPOINT, ResourceType};
 use glenda::protocol::{self, DEVICE_PROTO};
 
@@ -52,6 +55,7 @@ impl<'a> SystemService for UnicornManager<'a> {
     }
 
     fn run(&mut self) -> Result<(), Error> {
+        self.init_client.report_service(Badge::null(), ServiceState::Running)?;
         self.running = true;
         while self.running {
             let mut utcb = unsafe { UTCB::new() };
@@ -72,7 +76,12 @@ impl<'a> SystemService for UnicornManager<'a> {
                     continue;
                 }
                 let badge = utcb.get_badge();
-                error!("Failed to dispatch message for {}: {:?}", badge, e);
+                let proto = utcb.get_msg_tag().proto();
+                let label = utcb.get_msg_tag().label();
+                error!(
+                    "Failed to dispatch message for {}: {:?}, proto={:#x}, label={:#x}",
+                    badge, e, proto, label
+                );
                 utcb.set_msg_tag(MsgTag::err());
                 utcb.set_mr(0, e as usize);
             }
@@ -90,31 +99,6 @@ impl<'a> SystemService for UnicornManager<'a> {
             (protocol::KERNEL_PROTO, protocol::kernel::NOTIFY) => |s: &mut Self, _u: &mut UTCB| {
                 let irq = badge.bits();
                 s.handle_irq(irq)
-            },
-            (glenda_drivers::protocol::BLOCK_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
-                let badge = u.get_badge().bits();
-                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
-                Endpoint::from(*ep).call(u)
-            },
-            (glenda_drivers::protocol::PLATFORM_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
-                let badge = u.get_badge().bits();
-                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
-                Endpoint::from(*ep).call(u)
-            },
-            (glenda_drivers::protocol::THERMAL_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
-                let badge = u.get_badge().bits();
-                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
-                Endpoint::from(*ep).call(u)
-            },
-            (glenda_drivers::protocol::BATTERY_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
-                let badge = u.get_badge().bits();
-                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
-                Endpoint::from(*ep).call(u)
-            },
-            (glenda_drivers::protocol::ACPI_PROTO, _) => |s: &mut Self, u: &mut UTCB| {
-                let badge = u.get_badge().bits();
-                let (_, ep, _) = s.logical_devices.get(&badge).ok_or(Error::NotFound)?;
-                Endpoint::from(*ep).call(u)
             },
             (DEVICE_PROTO, device::REPORT) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
@@ -143,17 +127,6 @@ impl<'a> SystemService for UnicornManager<'a> {
                     let handler = s.get_irq(badge, id)?;
                     Ok(handler.cap())
                 })
-            },
-            (DEVICE_PROTO, device::GET_DESC) => |s: &mut Self, u: &mut UTCB| {
-                let name: alloc::string::String = unsafe { u.read_postcard()? };
-                let desc = s.get_desc(badge, &name)?;
-                unsafe { u.write_postcard(&desc)? };
-                u.set_msg_tag(MsgTag::new(
-                    glenda::protocol::DEVICE_PROTO,
-                    glenda::protocol::device::GET_DESC,
-                    glenda::ipc::MsgFlags::OK | glenda::ipc::MsgFlags::HAS_BUFFER,
-                ));
-                Ok(())
             },
             (DEVICE_PROTO, device::HOOK) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
@@ -184,9 +157,8 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (DEVICE_PROTO, device::ALLOC_LOGIC) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |u| {
-                    let (dev_type, criteria): (u32, alloc::string::String) =
-                        unsafe { u.read_postcard()? };
-                    let ep = s.alloc_logic(badge, dev_type, &criteria)?;
+                    let req: device::AllocLogicRequest = unsafe { u.read_postcard()? };
+                    let ep = s.alloc_logic(Badge::new(req.badge as usize), req.dev_type, &req.criteria)?;
                     Ok(ep.cap())
                 })
             },
@@ -201,7 +173,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (DEVICE_PROTO, device::GET_DESC) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
-                    let name: alloc::string::String = unsafe { u.read_postcard()? };
+                    let name = unsafe { u.read_str()? };
                     let desc = s.get_desc(badge, &name)?;
                     unsafe { u.write_postcard(&desc)? };
                     u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
@@ -210,7 +182,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (DEVICE_PROTO, device::GET_LOGIC_DESC) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
-                    let name: alloc::string::String = unsafe { u.read_postcard()? };
+                    let name = unsafe { u.read_str()? };
                     let (id, desc) = s.get_logic_desc(badge, &name)?;
                     u.set_mr(0, id as usize);
                     unsafe { u.write_postcard(&desc)? };
@@ -228,6 +200,9 @@ impl<'a> SystemService for UnicornManager<'a> {
 
     fn stop(&mut self) {
         self.running = false;
+        self.init_client.report_service(Badge::null(), ServiceState::Stopped).unwrap_or_else(|e| {
+            error!("Failed to report stopped state: {:?}", e);
+        });
     }
 }
 

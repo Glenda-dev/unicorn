@@ -8,11 +8,8 @@ use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Rights};
 use glenda::error::Error;
 use glenda::interface::{DeviceService, ResourceService};
-use glenda::ipc::{Badge, MsgFlags, MsgTag, UTCB};
-use glenda::protocol::DEVICE_PROTO;
-use glenda::protocol::device::{
-    self, DeviceDescNode, DeviceNotification, HookTarget, LogicDeviceDesc,
-};
+use glenda::ipc::{Badge, MsgTag, UTCB};
+use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc};
 use glenda::protocol::resource::ResourceType;
 use glenda::utils::manager::CSpaceService;
 
@@ -28,9 +25,6 @@ impl<'a> UnicornManager<'a> {
                 (false, alloc::vec![])
             };
 
-            // Trigger hooks for physical node discovery/update
-            self.trigger_hooks_for_node(id)?;
-
             if needs_start {
                 let _ = self.start_driver(id);
             }
@@ -42,24 +36,16 @@ impl<'a> UnicornManager<'a> {
         Ok(())
     }
 
-    fn trigger_hooks_for_node(&mut self, node_id: DeviceId) -> Result<(), Error> {
-        let logic_ids = {
-            let node = self.tree.get_node(node_id).ok_or(Error::NotFound)?;
-            node.logical_devices.clone()
-        };
-
-        for logic_id in logic_ids {
-            self.trigger_hooks_for_logic(logic_id)?;
-        }
-        Ok(())
-    }
-
-    fn trigger_hooks_for_logic(&mut self, logic_id: usize) -> Result<(), Error> {
+    fn notify_hook_on_logic(
+        &self,
+        logic_id: usize,
+        hooks: &[(HookTarget, CapPtr)],
+    ) -> Result<(), Error> {
         let (desc, ep, name) =
             self.logical_devices.get(&logic_id).cloned().ok_or(Error::NotFound)?;
 
         let mut notify_eps = Vec::new();
-        for (target, hook_ep) in &self.hooks {
+        for (target, hook_ep) in hooks {
             let notify = match target {
                 HookTarget::Endpoint(e) => *e == ep.bits() as u64,
                 HookTarget::Type(t) => {
@@ -72,21 +58,15 @@ impl<'a> UnicornManager<'a> {
         }
 
         for hook_ep in notify_eps {
-            log!("Notifying hook {:?} about logic device {}", hook_ep, name);
+            log!("Notifying hook {:?} for logic device {}", hook_ep, name);
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
-            let note = DeviceNotification::Registered(logic_id as u64, desc.clone());
-            if let Ok(_) = unsafe { utcb.write_postcard(&note) } {
-                utcb.set_msg_tag(MsgTag::new(
-                    DEVICE_PROTO,
-                    device::UPDATE,
-                    MsgFlags::HAS_CAP | MsgFlags::HAS_BUFFER,
-                ));
-                let slot = self.cspace_mgr.alloc(self.res_client)?;
-                let _ = self.cspace_mgr.root().mint(ep, slot, Badge::new(logic_id), Rights::ALL);
-                utcb.set_cap_transfer(slot);
-                let _ = Endpoint::from(hook_ep).call(&mut utcb);
-            }
+            utcb.set_msg_tag(MsgTag::new(
+                glenda::protocol::DEVICE_PROTO,
+                device::NOTIFY_HOOK,
+                glenda::ipc::MsgFlags::NONE,
+            ));
+            Endpoint::from(hook_ep).notify(&mut utcb)?;
         }
         Ok(())
     }
@@ -193,6 +173,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             let slot = self.cspace_mgr.alloc(self.res_client)?;
             if let Some(b) = desc.badge {
                 self.cspace_mgr.root().mint(endpoint, slot, Badge::new(b as usize), Rights::ALL)?;
+                let _ = self.cspace_mgr.root().delete(endpoint);
             } else {
                 self.cspace_mgr.root().move_cap(endpoint, slot)?;
             }
@@ -237,7 +218,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             }
         }
 
-        self.trigger_hooks_for_logic(id)
+        self.notify_hook_on_logic(id, &self.hooks)
     }
 
     fn alloc_logic(
@@ -246,7 +227,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
         dev_type: u32,
         criteria: &str,
     ) -> Result<Endpoint, Error> {
-        for (id, (desc, _ep, name)) in self.logical_devices.iter() {
+        for (_id, (desc, ep, name)) in self.logical_devices.iter() {
             let matched = match (&desc.dev_type, dev_type) {
                 (device::LogicDeviceType::RawBlock(_), 1) => true,
                 (device::LogicDeviceType::Block(_), 2) => true,
@@ -254,12 +235,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             };
             if matched && name == criteria {
                 let slot = self.cspace_mgr.alloc(self.res_client)?;
-                self.cspace_mgr.root().mint(
-                    self.endpoint.cap(),
-                    slot,
-                    Badge::new(*id),
-                    Rights::ALL,
-                )?;
+                self.cspace_mgr.root().mint(*ep, slot, _badge, Rights::ALL)?;
                 return Ok(Endpoint::from(slot));
             }
         }
@@ -272,9 +248,46 @@ impl<'a> DeviceService for UnicornManager<'a> {
         query: device::DeviceQuery,
     ) -> Result<Vec<alloc::string::String>, Error> {
         let mut results = Vec::new();
-        for (_id, (_desc, _ep, name)) in self.logical_devices.iter() {
-            if query.compatible.is_empty() || query.compatible.iter().any(|c| c == name) {
-                results.push(name.clone());
+        for (_id, (desc, _ep, assigned_name)) in self.logical_devices.iter() {
+            let mut matched = true;
+
+            // 1. Match by name (logic device descriptor name OR assigned name)
+            if let Some(qn) = &query.name {
+                if !assigned_name.contains(qn) && !desc.name.contains(qn) {
+                    matched = false;
+                }
+            }
+
+            // 2. Match by compatibility (if specified)
+            if matched && !query.compatible.is_empty() {
+                if !query.compatible.iter().any(|c| assigned_name == c || *c == desc.name) {
+                    matched = false;
+                }
+            }
+
+            // 3. Match by device type (if specified using u32 identifier)
+            if matched && query.dev_type.is_some() {
+                let qtype = query.dev_type.unwrap();
+                let type_match = match (&desc.dev_type, qtype) {
+                    (device::LogicDeviceType::RawBlock(_), 1) => true,
+                    (device::LogicDeviceType::Block(_), 2) => true,
+                    (device::LogicDeviceType::Net, 3) => true,
+                    (device::LogicDeviceType::Fb, 4) => true,
+                    (device::LogicDeviceType::Uart, 5) => true,
+                    (device::LogicDeviceType::Input, 6) => true,
+                    (device::LogicDeviceType::Gpio, 7) => true,
+                    (device::LogicDeviceType::Platform, 8) => true,
+                    (device::LogicDeviceType::Thermal, 9) => true,
+                    (device::LogicDeviceType::Battery, 10) => true,
+                    _ => false,
+                };
+                if !type_match {
+                    matched = false;
+                }
+            }
+
+            if matched {
+                results.push(assigned_name.clone());
             }
         }
         Ok(results)
@@ -303,6 +316,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
         _badge: Badge,
         name: &str,
     ) -> Result<(u64, LogicDeviceDesc), Error> {
+        log!("Getting logic desc for {}", name);
         for (id, (desc, _ep, dev_name)) in self.logical_devices.iter() {
             if dev_name == name {
                 return Ok((*id as u64, desc.clone()));
@@ -315,11 +329,13 @@ impl<'a> DeviceService for UnicornManager<'a> {
         log!("Registering hook for target {:?} at endpoint {:?}", target, endpoint);
         let slot = self.cspace_mgr.alloc(self.res_client)?;
         self.cspace_mgr.root().move_cap(endpoint, slot)?;
-        self.hooks.push((target, slot));
+        let new_hook = (target, slot);
+        self.hooks.push(new_hook);
 
         let logic_ids: Vec<usize> = self.logical_devices.keys().cloned().collect();
         for id in logic_ids {
-            let _ = self.trigger_hooks_for_logic(id);
+            let hook_ref = self.hooks.last().expect("Hooks shouldn't be empty");
+            let _ = self.notify_hook_on_logic(id, core::slice::from_ref(hook_ref));
         }
 
         Ok(())

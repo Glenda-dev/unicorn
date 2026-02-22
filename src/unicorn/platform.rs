@@ -6,7 +6,7 @@ use glenda::protocol::device::DeviceDesc;
 // 1. 强类型的 ID (句柄)
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct DeviceId {
-    index: u32,      // 在 Vec 中的数组下标
+    pub index: u32,  // 在 Vec 中的数组下标
     generation: u32, // 代数 (用于解决 ABA 问题)
 }
 

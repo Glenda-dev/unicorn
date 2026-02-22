@@ -5,8 +5,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use glenda::cap::{CapPtr, Endpoint, Reply};
-use glenda::client::ProcessClient;
-use glenda::client::ResourceClient;
+use glenda::client::{InitClient, ProcessClient, ResourceClient};
 use glenda::error::Error;
 use glenda::interface::ProcessService;
 use glenda::ipc::Badge;
@@ -26,6 +25,7 @@ pub struct UnicornManager<'a> {
     pub cspace_mgr: &'a mut CSpaceManager,
     pub res_client: &'a mut ResourceClient,
     pub proc_client: &'a mut ProcessClient,
+    pub init_client: &'a mut InitClient,
     pub config: Manifest,
     pub tree: DeviceTree,
     pub pids: BTreeMap<usize, DeviceId>, // driver_badge -> node_id
@@ -52,6 +52,7 @@ impl<'a> UnicornManager<'a> {
         cspace_mgr: &'a mut CSpaceManager,
         res_client: &'a mut ResourceClient,
         proc_client: &'a mut ProcessClient,
+        init_client: &'a mut InitClient,
     ) -> Self {
         Self {
             running: false,
@@ -61,6 +62,7 @@ impl<'a> UnicornManager<'a> {
             cspace_mgr,
             res_client,
             proc_client,
+            init_client,
             config: Manifest::new(),
             tree: DeviceTree::new(),
             pids: BTreeMap::new(),
@@ -150,8 +152,7 @@ impl<'a> UnicornManager<'a> {
             return Ok(());
         };
 
-        log!("Checking driver for device: {}", drv_name);
-        log!("Starting driver {} for device {}", drv_binary, drv_name);
+        log!("Starting driver {} for device {}", drv_binary, id.index);
 
         match self.proc_client.spawn(Badge::null(), &drv_binary) {
             Ok(pid) => {
