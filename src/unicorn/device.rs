@@ -95,7 +95,12 @@ impl<'a> DeviceService for UnicornManager<'a> {
         if let Some(root) = self.tree.root { self.scan_subtree(root) } else { Ok(()) }
     }
 
-    fn get_mmio(&mut self, badge: Badge, id: usize) -> Result<(Frame, usize, usize), Error> {
+    fn get_mmio(
+        &mut self,
+        badge: Badge,
+        id: usize,
+        _recv: CapPtr,
+    ) -> Result<(Frame, usize, usize), Error> {
         let driver_id = badge.bits();
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
@@ -115,10 +120,17 @@ impl<'a> DeviceService for UnicornManager<'a> {
             let pages = (size + PGSIZE - 1) / PGSIZE;
             MMIO_CAP.get_frame(base_addr, pages, slot)?;
         }
+        log!(
+            "Provided MMIO region for driver {}: base={:#x}, size={:#x}, name={}",
+            driver_id,
+            base_addr,
+            size,
+            name
+        );
         Ok((Frame::from(slot), base_addr, size))
     }
 
-    fn get_irq(&mut self, badge: Badge, id: usize) -> Result<IrqHandler, Error> {
+    fn get_irq(&mut self, badge: Badge, id: usize, _recv: CapPtr) -> Result<IrqHandler, Error> {
         let driver_id = badge.bits();
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
@@ -131,7 +143,14 @@ impl<'a> DeviceService for UnicornManager<'a> {
         };
 
         let slot = self.cspace_mgr.alloc(self.res_client)?;
-        self.res_client.get_cap(Badge::new(driver_id), ResourceType::Irq, irq_num, slot)?;
+        // Mint irqhandler from root handler
+        self.cspace_mgr.root().mint(
+            crate::layout::IRQ_CAP.cap(),
+            slot,
+            Badge::new(irq_num),
+            Rights::ALL,
+        )?;
+        log!("Provided IRQ for driver {}: irq_num={}, slot={:?}", driver_id, irq_num, slot);
         Ok(IrqHandler::from(slot))
     }
 
@@ -169,19 +188,8 @@ impl<'a> DeviceService for UnicornManager<'a> {
         desc: LogicDeviceDesc,
         endpoint: CapPtr,
     ) -> Result<(), Error> {
-        let ep = if !endpoint.is_null() {
-            let slot = self.cspace_mgr.alloc(self.res_client)?;
-            if let Some(b) = desc.badge {
-                self.cspace_mgr.root().mint(endpoint, slot, Badge::new(b as usize), Rights::ALL)?;
-                let _ = self.cspace_mgr.root().delete(endpoint);
-            } else {
-                self.cspace_mgr.root().move_cap(endpoint, slot)?;
-            }
-            slot
-        } else {
-            return Err(Error::InvalidArgs);
-        };
-
+        let ep = self.cspace_mgr.alloc(self.res_client)?;
+        self.cspace_mgr.root().move_cap(endpoint, ep)?;
         let name = match desc.dev_type {
             device::LogicDeviceType::RawBlock(_) => {
                 let n = alloc::format!("disk{}", self.disk_count);
@@ -204,9 +212,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 n
             }
         };
-
         log!("Registering logical device: {} -> {:?}", name, ep);
-
         let id = self.next_logic_id;
         self.next_logic_id += 1;
 
@@ -223,9 +229,10 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
     fn alloc_logic(
         &mut self,
-        _badge: Badge,
+        badge: Badge,
         dev_type: u32,
         criteria: &str,
+        _recv: CapPtr,
     ) -> Result<Endpoint, Error> {
         for (_id, (desc, ep, name)) in self.logical_devices.iter() {
             let matched = match (&desc.dev_type, dev_type) {
@@ -235,7 +242,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             };
             if matched && name == criteria {
                 let slot = self.cspace_mgr.alloc(self.res_client)?;
-                self.cspace_mgr.root().mint(*ep, slot, _badge, Rights::ALL)?;
+                self.cspace_mgr.root().mint(*ep, slot, badge, Rights::ALL)?;
                 return Ok(Endpoint::from(slot));
             }
         }
@@ -247,6 +254,12 @@ impl<'a> DeviceService for UnicornManager<'a> {
         _badge: Badge,
         query: device::DeviceQuery,
     ) -> Result<Vec<alloc::string::String>, Error> {
+        log!(
+            "Querying devices with criteria: name={:?}, compatible={:?}, dev_type={:?}",
+            query.name,
+            query.compatible,
+            query.dev_type
+        );
         let mut results = Vec::new();
         for (_id, (desc, _ep, assigned_name)) in self.logical_devices.iter() {
             let mut matched = true;
@@ -287,6 +300,11 @@ impl<'a> DeviceService for UnicornManager<'a> {
             }
 
             if matched {
+                log!(
+                    "Device matched query: assigned_name={}, desc_name={}",
+                    assigned_name,
+                    desc.name
+                );
                 results.push(assigned_name.clone());
             }
         }
@@ -326,9 +344,10 @@ impl<'a> DeviceService for UnicornManager<'a> {
     }
 
     fn hook(&mut self, _badge: Badge, target: HookTarget, endpoint: CapPtr) -> Result<(), Error> {
-        log!("Registering hook for target {:?} at endpoint {:?}", target, endpoint);
         let slot = self.cspace_mgr.alloc(self.res_client)?;
         self.cspace_mgr.root().move_cap(endpoint, slot)?;
+        log!("Registering hook for target {:?} at endpoint {:?}", target, slot);
+        // Note: endpoint MUST be in a managed slot already.
         let new_hook = (target, slot);
         self.hooks.push(new_hook);
 

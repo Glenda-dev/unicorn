@@ -8,12 +8,13 @@ use glenda::error::Error;
 use glenda::interface::{
     DeviceService, InitService, MemoryService, ResourceService, SystemService,
 };
-use glenda::ipc::server::{handle_call, handle_cap_call};
+use glenda::ipc::server::{handle_buffer_call, handle_call, handle_cap_call, handle_notify};
 use glenda::ipc::{Badge, MsgTag, UTCB};
 use glenda::protocol::device;
 use glenda::protocol::init::ServiceState;
 use glenda::protocol::resource::{DEVICE_ENDPOINT, ResourceType};
 use glenda::protocol::{self, DEVICE_PROTO};
+use glenda::utils::manager::CSpaceService;
 
 impl<'a> SystemService for UnicornManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
@@ -60,6 +61,7 @@ impl<'a> SystemService for UnicornManager<'a> {
         while self.running {
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
+            let _ = self.cspace_mgr.root().delete(self.recv);
             utcb.set_reply_window(self.reply.cap());
             utcb.set_recv_window(self.recv);
             match self.endpoint.recv(&mut utcb) {
@@ -96,9 +98,11 @@ impl<'a> SystemService for UnicornManager<'a> {
 
         glenda::ipc_dispatch! {
             self, utcb,
-            (protocol::KERNEL_PROTO, protocol::kernel::NOTIFY) => |s: &mut Self, _u: &mut UTCB| {
-                let irq = badge.bits();
-                s.handle_irq(irq)
+            (protocol::KERNEL_PROTO, protocol::kernel::NOTIFY) => |s: &mut Self, u: &mut UTCB| {
+                handle_notify(u, |_| {
+                    let irq = badge.bits();
+                    s.handle_irq(irq)
+                })
             },
             (DEVICE_PROTO, device::REPORT) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
@@ -115,7 +119,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             (DEVICE_PROTO, device::GET_MMIO) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |u| {
                     let id = u.get_mr(0);
-                    let (frame, paddr, size) = s.get_mmio(badge, id)?;
+                    let (frame, paddr, size) = s.get_mmio(badge, id,CapPtr::null())?;
                     u.set_mr(0, paddr);
                     u.set_mr(1, size);
                     Ok(frame.cap())
@@ -124,15 +128,14 @@ impl<'a> SystemService for UnicornManager<'a> {
             (DEVICE_PROTO, device::GET_IRQ) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |u| {
                     let id = u.get_mr(0);
-                    let handler = s.get_irq(badge, id)?;
+                    let handler = s.get_irq(badge, id,CapPtr::null())?;
                     Ok(handler.cap())
                 })
             },
             (DEVICE_PROTO, device::HOOK) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
                     let target = unsafe { u.read_postcard()? };
-                    let endpoint = u.get_recv_window();
-                    s.hook(badge, target, endpoint)
+                    s.hook(badge, target, s.recv)
                 })
             },
             (DEVICE_PROTO, device::UNHOOK) => |s: &mut Self, u: &mut UTCB| {
@@ -142,51 +145,43 @@ impl<'a> SystemService for UnicornManager<'a> {
                 })
             },
             (DEVICE_PROTO, device::SCAN_PLATFORM) => |s: &mut Self, u: &mut UTCB| {
-                handle_call(u, |_| s.scan_platform(badge))            },
+                handle_call(u, |_| s.scan_platform(badge))
+            },
             (DEVICE_PROTO, device::REGISTER_LOGIC) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
-                    let tag = u.get_msg_tag();
-                    let endpoint = if tag.flags().contains(glenda::ipc::MsgFlags::HAS_CAP) {
-                        u.get_recv_window()
-                    } else {
-                        glenda::cap::CapPtr::null()
-                    };
-                    s.register_logic(badge, desc, endpoint)
+                    s.register_logic(badge, desc, s.recv)
                 })
             },
             (DEVICE_PROTO, device::ALLOC_LOGIC) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |u| {
                     let req: device::AllocLogicRequest = unsafe { u.read_postcard()? };
-                    let ep = s.alloc_logic(Badge::new(req.badge as usize), req.dev_type, &req.criteria)?;
+                    let ep = s.alloc_logic(badge, req.dev_type, &req.criteria,CapPtr::null())?;
                     Ok(ep.cap())
                 })
             },
             (DEVICE_PROTO, device::QUERY) => |s: &mut Self, u: &mut UTCB| {
-                handle_call(u, |u| {
+                handle_buffer_call(u, |u| {
                     let query = unsafe { u.read_postcard()? };
                     let names = s.query(badge, query)?;
                     unsafe { u.write_postcard(&names)? };
-                    u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
                     Ok(())
                 })
             },
             (DEVICE_PROTO, device::GET_DESC) => |s: &mut Self, u: &mut UTCB| {
-                handle_call(u, |u| {
+                handle_buffer_call(u, |u| {
                     let name = unsafe { u.read_str()? };
                     let desc = s.get_desc(badge, &name)?;
                     unsafe { u.write_postcard(&desc)? };
-                    u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
                     Ok(())
                 })
             },
             (DEVICE_PROTO, device::GET_LOGIC_DESC) => |s: &mut Self, u: &mut UTCB| {
-                handle_call(u, |u| {
+                handle_buffer_call(u, |u| {
                     let name = unsafe { u.read_str()? };
                     let (id, desc) = s.get_logic_desc(badge, &name)?;
                     u.set_mr(0, id as usize);
                     unsafe { u.write_postcard(&desc)? };
-                    u.set_msg_tag(glenda::ipc::MsgTag::new(0, 0, glenda::ipc::MsgFlags::HAS_BUFFER));
                     Ok(())
                 })
             },
