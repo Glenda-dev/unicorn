@@ -8,8 +8,8 @@ use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Rights};
 use glenda::error::Error;
 use glenda::interface::{DeviceService, ResourceService};
-use glenda::ipc::{Badge, MsgTag, UTCB};
-use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc};
+use glenda::ipc::Badge;
+use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc, NOTIFY_HOOK};
 use glenda::protocol::resource::ResourceType;
 use glenda::utils::manager::CSpaceService;
 
@@ -59,14 +59,7 @@ impl<'a> UnicornManager<'a> {
 
         for hook_ep in notify_eps {
             log!("Notifying hook {:?} for logic device {}", hook_ep, name);
-            let mut utcb = unsafe { UTCB::new() };
-            utcb.clear();
-            utcb.set_msg_tag(MsgTag::new(
-                glenda::protocol::DEVICE_PROTO,
-                device::NOTIFY_HOOK,
-                glenda::ipc::MsgFlags::NONE,
-            ));
-            Endpoint::from(hook_ep).notify(&mut utcb)?;
+            Endpoint::from(hook_ep).notify(Badge::new(NOTIFY_HOOK))?;
         }
         Ok(())
     }
