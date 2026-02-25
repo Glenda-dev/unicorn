@@ -35,6 +35,12 @@ fn main() -> usize {
     res_client
         .get_cap(Badge::null(), ResourceType::Endpoint, INIT_ENDPOINT, INIT_SLOT)
         .expect("Failed to get init endpoint");
+    res_client
+        .get_cap(Badge::null(), ResourceType::Kernel, 0, layout::KERNEL_SLOT)
+        .expect("Failed to get kernel cap");
+    res_client
+        .get_cap(Badge::null(), ResourceType::IrqControl, 0, layout::IRQ_CONTROL_SLOT)
+        .expect("Failed to get IRQ control cap for unicorn");
     let mut cspace_mgr = CSpaceManager::new(CSPACE_CAP, 16);
     let mut init_client = InitClient::new(INIT_CAP);
     let mut server =

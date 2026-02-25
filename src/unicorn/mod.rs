@@ -1,4 +1,5 @@
 use crate::config::Manifest;
+use crate::layout::IRQ_CONTROL_CAP;
 use crate::unicorn::platform::{DeviceId, DeviceState, DeviceTree};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -102,6 +103,11 @@ impl<'a> UnicornManager<'a> {
             irq: Vec::new(),
         };
         self.tree.insert(None, root_desc)?;
+        let cpus = bootinfo.cpus as usize;
+        for cpu_id in 0..cpus {
+            IRQ_CONTROL_CAP.set_threshold(cpu_id, 0)?;
+        }
+
         Ok(())
     }
 

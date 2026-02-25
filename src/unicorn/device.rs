@@ -1,16 +1,15 @@
 use super::DeviceState;
 use super::platform::DeviceId;
-use crate::layout::MMIO_CAP;
+use crate::layout::{IRQ_CONTROL_CAP, KERNEL_CAP};
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Rights};
 use glenda::error::Error;
-use glenda::interface::{DeviceService, ResourceService};
+use glenda::interface::DeviceService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc, NOTIFY_HOOK};
-use glenda::protocol::resource::ResourceType;
 use glenda::utils::manager::CSpaceService;
 
 impl<'a> UnicornManager<'a> {
@@ -106,13 +105,15 @@ impl<'a> DeviceService for UnicornManager<'a> {
             (region.base_addr, region.size, node.desc.name.clone())
         };
 
-        let slot = self.cspace_mgr.alloc(self.res_client)?;
-        if name == "dtb" || name == "acpi" {
-            self.res_client.get_cap(Badge::new(driver_id), ResourceType::Mmio, base_addr, slot)?;
-        } else {
-            let pages = (size + PGSIZE - 1) / PGSIZE;
-            MMIO_CAP.get_frame(base_addr, pages, slot)?;
+        if let Some(&slot) = self.mmio_caps.get(&base_addr) {
+            log!("Using cached MMIO region for driver {}: base={:#x}", driver_id, base_addr);
+            return Ok((Frame::from(slot), base_addr, size));
         }
+
+        let slot = self.cspace_mgr.alloc(self.res_client)?;
+        let pages = (size + PGSIZE - 1) / PGSIZE;
+        KERNEL_CAP.get_mmio(base_addr, pages, slot)?;
+        self.mmio_caps.insert(base_addr, slot);
         log!(
             "Provided MMIO region for driver {}: base={:#x}, size={:#x}, name={}",
             driver_id,
@@ -135,16 +136,22 @@ impl<'a> DeviceService for UnicornManager<'a> {
             node.desc.irq[id]
         };
 
+        if let Some(&slot) = self.irq_caps.get(&irq_num) {
+            log!("Using cached IRQ for driver {}: irq_num={}", driver_id, irq_num);
+            return Ok(IrqHandler::from(slot));
+        }
+
         let slot = self.cspace_mgr.alloc(self.res_client)?;
-        // Mint irqhandler from root handler
-        self.cspace_mgr.root().mint(
-            crate::layout::IRQ_CAP.cap(),
-            slot,
-            Badge::new(irq_num),
-            Rights::ALL,
-        )?;
+        // Get IRQ via Kernel Cap
+        KERNEL_CAP.get_irq(irq_num, slot)?;
+
+        let handler = IrqHandler::from(slot);
+        // "unicorn在授权时设置优先级以打开中断"
+        IRQ_CONTROL_CAP.set_priority(irq_num, 1)?;
+
+        self.irq_caps.insert(irq_num, slot);
         log!("Provided IRQ for driver {}: irq_num={}, slot={:?}", driver_id, irq_num, slot);
-        Ok(IrqHandler::from(slot))
+        Ok(handler)
     }
 
     fn report(&mut self, badge: Badge, desc: Vec<DeviceDescNode>) -> Result<(), Error> {

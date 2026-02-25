@@ -1,7 +1,5 @@
 use crate::UnicornManager;
-use crate::layout::{
-    BOOTINFO_ADDR, BOOTINFO_SLOT, IRQ_SLOT, MANIFEST_SLOT, MMIO_SLOT, RESOURCE_ADDR,
-};
+use crate::layout::{BOOTINFO_ADDR, BOOTINFO_SLOT, MANIFEST_SLOT, RESOURCE_ADDR};
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
@@ -30,9 +28,6 @@ impl<'a> SystemService for UnicornManager<'a> {
         let frame =
             self.res_client.get_cap(Badge::null(), ResourceType::Bootinfo, 0, BOOTINFO_SLOT)?;
         self.res_client.mmap(Badge::null(), Frame::from(frame), BOOTINFO_ADDR, PGSIZE)?;
-
-        self.res_client.get_cap(Badge::null(), ResourceType::Mmio, 0, MMIO_SLOT)?;
-        self.res_client.get_cap(Badge::null(), ResourceType::Irq, 0, IRQ_SLOT)?;
 
         self.init_root_platform()?;
         self.init_initrd_device()?;
@@ -118,8 +113,8 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (DEVICE_PROTO, device::GET_MMIO) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |u| {
-                    let id = u.get_mr(0);
-                    let (frame, paddr, size) = s.get_mmio(badge, id,CapPtr::null())?;
+                    let id = u.get_mr(0) as usize;
+                    let (frame, paddr, size) = s.get_mmio(badge, id, CapPtr::null())?;
                     u.set_mr(0, paddr);
                     u.set_mr(1, size);
                     Ok(frame.cap())
@@ -127,8 +122,8 @@ impl<'a> SystemService for UnicornManager<'a> {
             },
             (DEVICE_PROTO, device::GET_IRQ) => |s: &mut Self, u: &mut UTCB| {
                 handle_cap_call(u, |u| {
-                    let id = u.get_mr(0);
-                    let handler = s.get_irq(badge, id,CapPtr::null())?;
+                    let id = u.get_mr(0) as usize;
+                    let handler = s.get_irq(badge, id, CapPtr::null())?;
                     Ok(handler.cap())
                 })
             },
