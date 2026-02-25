@@ -10,9 +10,10 @@ use glenda::client::{InitClient, ProcessClient, ResourceClient};
 use glenda::error::Error;
 use glenda::interface::ProcessService;
 use glenda::ipc::Badge;
-use glenda::protocol::device::{DeviceDesc, LogicDeviceDesc, MMIORegion};
+use glenda::protocol::device::{DeviceDesc, HookTarget, LogicDeviceDesc, MMIORegion};
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::CSpaceManager;
+use glenda_drivers::protocol::thermal::ThermalZones;
 
 pub mod device;
 pub mod platform;
@@ -34,8 +35,8 @@ pub struct UnicornManager<'a> {
     pub irq_caps: BTreeMap<usize, CapPtr>,
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
     pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr, String)>, // (desc, endpoint, name)
-    pub thermal_zones: BTreeMap<usize, (glenda::protocol::device::thermal::ThermalZones, String)>, // (zones, driver_name)
-    pub hooks: Vec<(glenda::protocol::device::HookTarget, CapPtr)>,
+    pub thermal_zones: BTreeMap<usize, (ThermalZones, String)>,              // (zones, driver_name)
+    pub hooks: Vec<(HookTarget, CapPtr)>,
     pub next_logic_id: usize,
     pub disk_count: usize,
     pub net_count: usize,
