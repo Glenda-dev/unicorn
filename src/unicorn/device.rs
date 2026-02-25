@@ -213,6 +213,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 alloc::format!("{}p{}", desc.parent_name, count + 1)
             }
             _ => {
+                warn!("Unnamed logic device type {:?}, assigning generic name", desc.dev_type);
                 let n = alloc::format!("logic{}", self.next_logic_id);
                 n
             }
@@ -220,7 +221,6 @@ impl<'a> DeviceService for UnicornManager<'a> {
         log!("Registering logical device: {} -> {:?}", name, ep);
         let id = self.next_logic_id;
         self.next_logic_id += 1;
-
         self.logical_devices.insert(id, (desc.clone(), ep, name.clone()));
 
         if let Some(node_id) = self.find_node_by_name(&desc.parent_name) {
@@ -243,6 +243,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             let matched = match (&desc.dev_type, dev_type) {
                 (device::LogicDeviceType::RawBlock(_), 1) => true,
                 (device::LogicDeviceType::Block(_), 2) => true,
+                (device::LogicDeviceType::Net, 3) => true,
                 _ => false,
             };
             if matched && name == criteria {
