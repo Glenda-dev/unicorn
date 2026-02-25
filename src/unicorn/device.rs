@@ -196,6 +196,11 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 self.disk_count += 1;
                 n
             }
+            device::LogicDeviceType::Net => {
+                let n = alloc::format!("net{}", self.net_count);
+                self.net_count += 1;
+                n
+            }
             device::LogicDeviceType::Block(_) => {
                 let count = self
                     .logical_devices
