@@ -355,13 +355,6 @@ impl<'a> DeviceService for UnicornManager<'a> {
         // Note: endpoint MUST be in a managed slot already.
         let new_hook = (target, slot);
         self.hooks.push(new_hook);
-
-        let logic_ids: Vec<usize> = self.logical_devices.keys().cloned().collect();
-        for id in logic_ids {
-            let hook_ref = self.hooks.last().expect("Hooks shouldn't be empty");
-            let _ = self.notify_hook_on_logic(id, core::slice::from_ref(hook_ref));
-        }
-
         Ok(())
     }
 
