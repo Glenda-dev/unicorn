@@ -192,7 +192,6 @@ impl DeviceTree {
             } else {
                 *index_map.get(&node_desc.parent).ok_or(Error::InvalidArgs)?
             };
-            log!("Inserting {:?}", node_desc.desc);
             let new_id = self.insert(Some(parent_id), node_desc.desc)?;
             index_map.insert(i, new_id);
         }
