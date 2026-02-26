@@ -3,6 +3,7 @@ use super::platform::DeviceId;
 use crate::layout::{IRQ_CONTROL_CAP, KERNEL_CAP};
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Rights};
@@ -212,6 +213,12 @@ impl<'a> DeviceService for UnicornManager<'a> {
                     .count();
                 alloc::format!("{}p{}", desc.parent_name, count + 1)
             }
+            device::LogicDeviceType::Timer(_) => {
+                let n = alloc::format!("timer{}", self.timer_count);
+                self.timer_count += 1;
+                n
+            }
+            device::LogicDeviceType::Platform => "platform".to_string(),
             _ => {
                 warn!("Unnamed logic device type {:?}, assigning generic name", desc.dev_type);
                 let n = alloc::format!("logic{}", self.next_logic_id);
@@ -244,6 +251,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
                 (device::LogicDeviceType::RawBlock(_), 1) => true,
                 (device::LogicDeviceType::Block(_), 2) => true,
                 (device::LogicDeviceType::Net, 3) => true,
+                (device::LogicDeviceType::Timer(_), 11) => true,
                 _ => false,
             };
             if matched && name == criteria {
@@ -298,6 +306,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
                     (device::LogicDeviceType::Platform, 8) => true,
                     (device::LogicDeviceType::Thermal, 9) => true,
                     (device::LogicDeviceType::Battery, 10) => true,
+                    (device::LogicDeviceType::Timer(_), 11) => true,
                     _ => false,
                 };
                 if !type_match {

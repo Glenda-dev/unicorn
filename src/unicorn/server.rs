@@ -62,7 +62,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             match self.endpoint.recv(&mut utcb) {
                 Ok(_) => {}
                 Err(e) => {
-                    log!("Recv error: {:?}", e);
+                    error!("Recv error: {:?}", e);
                     continue;
                 }
             };

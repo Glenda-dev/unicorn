@@ -47,6 +47,7 @@ pub struct UnicornManager<'a> {
     pub platform_count: usize,
     pub thermal_count: usize,
     pub battery_count: usize,
+    pub timer_count: usize,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -84,6 +85,7 @@ impl<'a> UnicornManager<'a> {
             platform_count: 0,
             thermal_count: 0,
             battery_count: 0,
+            timer_count: 0,
         }
     }
 
