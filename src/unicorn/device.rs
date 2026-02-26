@@ -3,10 +3,9 @@ use super::platform::DeviceId;
 use crate::layout::{IRQ_CONTROL_CAP, KERNEL_CAP};
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Rights};
+use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler};
 use glenda::error::Error;
 use glenda::interface::DeviceService;
 use glenda::ipc::Badge;
@@ -42,15 +41,13 @@ impl<'a> UnicornManager<'a> {
         hooks: &[(HookTarget, CapPtr)],
     ) -> Result<(), Error> {
         let (desc, ep, name) =
-            self.logical_devices.get(&logic_id).cloned().ok_or(Error::NotFound)?;
+            self.logic_service.devices.get(&logic_id).cloned().ok_or(Error::NotFound)?;
 
         let mut notify_eps = Vec::new();
         for (target, hook_ep) in hooks {
             let notify = match target {
                 HookTarget::Endpoint(e) => *e == ep.bits() as u64,
-                HookTarget::Type(t) => {
-                    core::mem::discriminant(t) == core::mem::discriminant(&desc.dev_type)
-                }
+                HookTarget::Type(t) => *t == desc.dev_type,
             };
             if notify {
                 notify_eps.push(*hook_ep);
@@ -189,46 +186,12 @@ impl<'a> DeviceService for UnicornManager<'a> {
         desc: LogicDeviceDesc,
         endpoint: CapPtr,
     ) -> Result<(), Error> {
-        let ep = self.cspace_mgr.alloc(self.res_client)?;
-        self.cspace_mgr.root().move_cap(endpoint, ep)?;
-        let name = match desc.dev_type {
-            device::LogicDeviceType::RawBlock(_) => {
-                let n = alloc::format!("disk{}", self.disk_count);
-                self.disk_count += 1;
-                n
-            }
-            device::LogicDeviceType::Net => {
-                let n = alloc::format!("net{}", self.net_count);
-                self.net_count += 1;
-                n
-            }
-            device::LogicDeviceType::Block(_) => {
-                let count = self
-                    .logical_devices
-                    .values()
-                    .filter(|(d, _, _)| {
-                        matches!(d.dev_type, device::LogicDeviceType::Block(_))
-                            && d.parent_name == desc.parent_name
-                    })
-                    .count();
-                alloc::format!("{}p{}", desc.parent_name, count + 1)
-            }
-            device::LogicDeviceType::Timer(_) => {
-                let n = alloc::format!("timer{}", self.timer_count);
-                self.timer_count += 1;
-                n
-            }
-            device::LogicDeviceType::Platform => "platform".to_string(),
-            _ => {
-                warn!("Unnamed logic device type {:?}, assigning generic name", desc.dev_type);
-                let n = alloc::format!("logic{}", self.next_logic_id);
-                n
-            }
-        };
-        log!("Registering logical device: {} -> {:?}", name, ep);
-        let id = self.next_logic_id;
-        self.next_logic_id += 1;
-        self.logical_devices.insert(id, (desc.clone(), ep, name.clone()));
+        let (id, _name, _ep) = self.logic_service.register(
+            self.cspace_mgr,
+            self.res_client,
+            desc.clone(),
+            endpoint,
+        )?;
 
         if let Some(node_id) = self.find_node_by_name(&desc.parent_name) {
             if let Some(node) = self.tree.get_node_mut(node_id) {
@@ -242,25 +205,11 @@ impl<'a> DeviceService for UnicornManager<'a> {
     fn alloc_logic(
         &mut self,
         badge: Badge,
-        dev_type: u32,
+        dev_type: device::LogicDeviceType,
         criteria: &str,
         _recv: CapPtr,
     ) -> Result<Endpoint, Error> {
-        for (_id, (desc, ep, name)) in self.logical_devices.iter() {
-            let matched = match (&desc.dev_type, dev_type) {
-                (device::LogicDeviceType::RawBlock(_), 1) => true,
-                (device::LogicDeviceType::Block(_), 2) => true,
-                (device::LogicDeviceType::Net, 3) => true,
-                (device::LogicDeviceType::Timer(_), 11) => true,
-                _ => false,
-            };
-            if matched && name == criteria {
-                let slot = self.cspace_mgr.alloc(self.res_client)?;
-                self.cspace_mgr.root().mint(*ep, slot, badge, Rights::ALL)?;
-                return Ok(Endpoint::from(slot));
-            }
-        }
-        Err(Error::NotFound)
+        self.logic_service.alloc(self.cspace_mgr, self.res_client, badge, dev_type, criteria)
     }
 
     fn query(
@@ -274,56 +223,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             query.compatible,
             query.dev_type
         );
-        let mut results = Vec::new();
-        for (_id, (desc, _ep, assigned_name)) in self.logical_devices.iter() {
-            let mut matched = true;
-
-            // 1. Match by name (logic device descriptor name OR assigned name)
-            if let Some(qn) = &query.name {
-                if !assigned_name.contains(qn) && !desc.name.contains(qn) {
-                    matched = false;
-                }
-            }
-
-            // 2. Match by compatibility (if specified)
-            if matched && !query.compatible.is_empty() {
-                if !query.compatible.iter().any(|c| assigned_name == c || *c == desc.name) {
-                    matched = false;
-                }
-            }
-
-            // 3. Match by device type (if specified using u32 identifier)
-            if matched && query.dev_type.is_some() {
-                let qtype = query.dev_type.unwrap();
-                let type_match = match (&desc.dev_type, qtype) {
-                    (device::LogicDeviceType::RawBlock(_), 1) => true,
-                    (device::LogicDeviceType::Block(_), 2) => true,
-                    (device::LogicDeviceType::Net, 3) => true,
-                    (device::LogicDeviceType::Fb, 4) => true,
-                    (device::LogicDeviceType::Uart, 5) => true,
-                    (device::LogicDeviceType::Input, 6) => true,
-                    (device::LogicDeviceType::Gpio, 7) => true,
-                    (device::LogicDeviceType::Platform, 8) => true,
-                    (device::LogicDeviceType::Thermal, 9) => true,
-                    (device::LogicDeviceType::Battery, 10) => true,
-                    (device::LogicDeviceType::Timer(_), 11) => true,
-                    _ => false,
-                };
-                if !type_match {
-                    matched = false;
-                }
-            }
-
-            if matched {
-                log!(
-                    "Device matched query: assigned_name={}, desc_name={}",
-                    assigned_name,
-                    desc.name
-                );
-                results.push(assigned_name.clone());
-            }
-        }
-        Ok(results)
+        self.logic_service.query(query)
     }
 
     fn get_desc(&mut self, _badge: Badge, name: &str) -> Result<device::DeviceDesc, Error> {
@@ -349,13 +249,8 @@ impl<'a> DeviceService for UnicornManager<'a> {
         _badge: Badge,
         name: &str,
     ) -> Result<(u64, LogicDeviceDesc), Error> {
-        log!("Getting logic desc for {}", name);
-        for (id, (desc, _ep, dev_name)) in self.logical_devices.iter() {
-            if dev_name == name {
-                return Ok((*id as u64, desc.clone()));
-            }
-        }
-        Err(Error::NotFound)
+        let (id, desc) = self.logic_service.get_desc(name).ok_or(Error::NotFound)?;
+        Ok((id as u64, desc))
     }
 
     fn hook(&mut self, _badge: Badge, target: HookTarget, endpoint: CapPtr) -> Result<(), Error> {

@@ -10,14 +10,17 @@ use glenda::client::{InitClient, ProcessClient, ResourceClient};
 use glenda::error::Error;
 use glenda::interface::ProcessService;
 use glenda::ipc::Badge;
-use glenda::protocol::device::{DeviceDesc, HookTarget, LogicDeviceDesc, MMIORegion};
+use glenda::protocol::device::{DeviceDesc, HookTarget, MMIORegion};
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::CSpaceManager;
 use glenda_drivers::protocol::thermal::ThermalZones;
 
 pub mod device;
+pub mod logic;
 pub mod platform;
 pub mod server;
+
+use logic::LogicDeviceService;
 
 pub struct UnicornManager<'a> {
     pub running: bool,
@@ -34,20 +37,9 @@ pub struct UnicornManager<'a> {
     pub irqs: BTreeMap<usize, DeviceId>, // irq_num -> node_id
     pub irq_caps: BTreeMap<usize, CapPtr>,
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
-    pub logical_devices: BTreeMap<usize, (LogicDeviceDesc, CapPtr, String)>, // (desc, endpoint, name)
-    pub thermal_zones: BTreeMap<usize, (ThermalZones, String)>,              // (zones, driver_name)
+    pub logic_service: LogicDeviceService,
+    pub thermal_zones: BTreeMap<usize, (ThermalZones, String)>, // (zones, driver_name)
     pub hooks: Vec<(HookTarget, CapPtr)>,
-    pub next_logic_id: usize,
-    pub disk_count: usize,
-    pub net_count: usize,
-    pub fb_count: usize,
-    pub uart_count: usize,
-    pub input_count: usize,
-    pub gpio_count: usize,
-    pub platform_count: usize,
-    pub thermal_count: usize,
-    pub battery_count: usize,
-    pub timer_count: usize,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -72,20 +64,9 @@ impl<'a> UnicornManager<'a> {
             irqs: BTreeMap::new(),
             irq_caps: BTreeMap::new(),
             mmio_caps: BTreeMap::new(),
-            logical_devices: BTreeMap::new(),
+            logic_service: LogicDeviceService::new(),
             thermal_zones: BTreeMap::new(),
             hooks: Vec::new(),
-            next_logic_id: 1,
-            disk_count: 0,
-            net_count: 0,
-            fb_count: 0,
-            uart_count: 0,
-            input_count: 0,
-            gpio_count: 0,
-            platform_count: 0,
-            thermal_count: 0,
-            battery_count: 0,
-            timer_count: 0,
         }
     }
 
