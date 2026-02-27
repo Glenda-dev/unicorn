@@ -88,6 +88,21 @@ impl LogicDeviceService {
                 n
             }
             device::LogicDeviceType::Platform => "platform".to_string(),
+            device::LogicDeviceType::Fb => {
+                let n = alloc::format!("fb{}", self.counter.fb);
+                self.counter.fb += 1;
+                n
+            }
+            device::LogicDeviceType::Uart => {
+                let n = alloc::format!("uart{}", self.counter.uart);
+                self.counter.uart += 1;
+                n
+            }
+            device::LogicDeviceType::Input => {
+                let n = alloc::format!("input{}", self.counter.input);
+                self.counter.input += 1;
+                n
+            }
             _ => {
                 let n = alloc::format!("logic{}", self.counter.next_id);
                 n
