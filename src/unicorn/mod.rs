@@ -1,7 +1,7 @@
 use crate::config::Manifest;
 use crate::layout::IRQ_CONTROL_CAP;
 use crate::unicorn::platform::{DeviceId, DeviceState, DeviceTree};
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -40,6 +40,7 @@ pub struct UnicornManager<'a> {
     pub logic_service: LogicDeviceService,
     pub thermal_zones: BTreeMap<usize, (ThermalZones, String)>, // (zones, driver_name)
     pub hooks: Vec<(HookTarget, CapPtr)>,
+    pub spawn_queue: VecDeque<DeviceId>,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -67,6 +68,7 @@ impl<'a> UnicornManager<'a> {
             logic_service: LogicDeviceService::new(),
             thermal_zones: BTreeMap::new(),
             hooks: Vec::new(),
+            spawn_queue: VecDeque::new(),
         }
     }
 

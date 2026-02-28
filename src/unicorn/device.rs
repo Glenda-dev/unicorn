@@ -25,7 +25,7 @@ impl<'a> UnicornManager<'a> {
             };
 
             if needs_start {
-                let _ = self.start_driver(id);
+                self.spawn_queue.push_back(id);
             }
 
             for child in children {
@@ -257,9 +257,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
         let slot = self.cspace_mgr.alloc(self.res_client)?;
         self.cspace_mgr.root().move_cap(endpoint, slot)?;
         log!("Registering hook for target {:?} at endpoint {:?}", target, slot);
-        // Note: endpoint MUST be in a managed slot already.
         let new_hook = (target, slot);
         self.hooks.push(new_hook);
+        Endpoint::from(slot).notify(Badge::new(NOTIFY_HOOK))?;
         Ok(())
     }
 

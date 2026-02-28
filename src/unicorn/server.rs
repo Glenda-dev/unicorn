@@ -54,6 +54,12 @@ impl<'a> SystemService for UnicornManager<'a> {
         self.init_client.report_service(Badge::null(), ServiceState::Running)?;
         self.running = true;
         while self.running {
+            while let Some(id) = self.spawn_queue.pop_front() {
+                if let Err(e) = self.start_driver(id) {
+                    error!("Failed to start driver for device {}: {:?}", id.index, e);
+                }
+            }
+
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
             let _ = self.cspace_mgr.root().delete(self.recv);
@@ -67,14 +73,15 @@ impl<'a> SystemService for UnicornManager<'a> {
                 }
             };
 
+            let badge = utcb.get_badge();
+            let proto = utcb.get_msg_tag().proto();
+            let label = utcb.get_msg_tag().label();
+
             let res = self.dispatch(&mut utcb);
             if let Err(e) = res {
                 if e == Error::Success {
                     continue;
                 }
-                let badge = utcb.get_badge();
-                let proto = utcb.get_msg_tag().proto();
-                let label = utcb.get_msg_tag().label();
                 error!(
                     "Failed to dispatch message for {}: {:?}, proto={:#x}, label={:#x}",
                     badge, e, proto, label
@@ -83,7 +90,9 @@ impl<'a> SystemService for UnicornManager<'a> {
                 utcb.set_mr(0, e as usize);
             }
 
-            self.reply(&mut utcb)?;
+            if let Err(e) = self.reply(&mut utcb) {
+                error!("Reply failed: {:?}", e);
+            }
         }
         Ok(())
     }
