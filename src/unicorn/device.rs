@@ -5,12 +5,12 @@ use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Frame, IrqHandler};
 use glenda::error::Error;
+use glenda::interface::CSpaceService;
 use glenda::interface::DeviceService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc, NOTIFY_HOOK};
-use glenda::utils::manager::CSpaceService;
 
 impl<'a> UnicornManager<'a> {
     fn scan_subtree(&mut self, start_id: DeviceId) -> Result<(), Error> {
@@ -126,13 +126,11 @@ impl<'a> DeviceService for UnicornManager<'a> {
         let driver_id = badge.bits();
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
-        let irq_num = {
-            let node = self.tree.get_node(node_id).ok_or(Error::InvalidArgs)?;
-            if id >= node.desc.irq.len() {
-                return Err(Error::InvalidArgs);
-            }
-            node.desc.irq[id]
-        };
+        let node = self.tree.get_node(node_id).ok_or(Error::InvalidArgs)?;
+        if id >= node.desc.irq.len() {
+            return Err(Error::InvalidArgs);
+        }
+        let irq_num = node.desc.irq[id];
 
         if let Some(&slot) = self.irq_caps.get(&irq_num) {
             log!("Using cached IRQ for driver {}: irq_num={}", driver_id, irq_num);
@@ -144,11 +142,10 @@ impl<'a> DeviceService for UnicornManager<'a> {
         KERNEL_CAP.get_irq(irq_num, slot)?;
 
         let handler = IrqHandler::from(slot);
-        // "unicorn在授权时设置优先级以打开中断"
         IRQ_CONTROL_CAP.set_priority(irq_num, 1)?;
 
         self.irq_caps.insert(irq_num, slot);
-        log!("Provided IRQ for driver {}: irq_num={}, slot={:?}", driver_id, irq_num, slot);
+        log!("Provided IRQ for driver {}: irq_num={}, slot={:?}", node.desc.name, irq_num, slot);
         Ok(handler)
     }
 
@@ -255,7 +252,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
     fn hook(&mut self, _badge: Badge, target: HookTarget, endpoint: CapPtr) -> Result<(), Error> {
         let slot = self.cspace_mgr.alloc(self.res_client)?;
-        self.cspace_mgr.root().move_cap(endpoint, slot)?;
+        CSPACE_CAP.move_cap(endpoint, slot)?;
         log!("Registering hook for target {:?} at endpoint {:?}", target, slot);
         let new_hook = (target, slot);
         self.hooks.push(new_hook);

@@ -18,7 +18,7 @@ use glenda::error::Error;
 use glenda::interface::{ResourceService, SystemService};
 use glenda::ipc::Badge;
 use glenda::protocol::resource::{INIT_ENDPOINT, ResourceType};
-use glenda::utils::manager::CSpaceManager;
+use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 use layout::{INIT_CAP, INIT_SLOT};
 use unicorn::UnicornManager;
 
@@ -41,10 +41,17 @@ fn main() -> usize {
     res_client
         .get_cap(Badge::null(), ResourceType::IrqControl, 0, layout::IRQ_CONTROL_SLOT)
         .expect("Failed to get IRQ control cap for unicorn");
+
     let mut cspace_mgr = CSpaceManager::new(CSPACE_CAP, 16);
+    let mut vspace_mgr = VSpaceManager::new(glenda::cap::VSPACE_CAP, 0x7000_0000, 0x8000_0000);
     let mut init_client = InitClient::new(INIT_CAP);
-    let mut server =
-        UnicornManager::new(&mut cspace_mgr, &mut res_client, &mut proc_client, &mut init_client);
+    let mut server = UnicornManager::new(
+        &mut cspace_mgr,
+        &mut vspace_mgr,
+        &mut res_client,
+        &mut proc_client,
+        &mut init_client,
+    );
     if let Err(e) = load_unicorn(&mut server) {
         log!("Failed to load: {:?}", e);
         return 1;

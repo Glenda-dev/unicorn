@@ -1,12 +1,12 @@
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use glenda::cap::{CapPtr, Endpoint, Rights};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Rights};
 use glenda::client::ResourceClient;
 use glenda::error::Error;
+use glenda::interface::CSpaceService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::{self, DeviceQuery, LogicDeviceDesc, LogicDeviceType};
-use glenda::utils::manager::CSpaceService;
 
 pub struct LogicDeviceCounter {
     pub disk: usize,
@@ -58,7 +58,7 @@ impl LogicDeviceService {
         endpoint: CapPtr,
     ) -> Result<(usize, String, CapPtr), Error> {
         let ep = cspace_mgr.alloc(res_client)?;
-        cspace_mgr.root().move_cap(endpoint, ep)?;
+        CSPACE_CAP.move_cap(endpoint, ep)?;
 
         let name = match desc.dev_type {
             device::LogicDeviceType::Block => {
@@ -127,7 +127,7 @@ impl LogicDeviceService {
         for (_id, (desc, ep, name)) in self.devices.iter() {
             if desc.dev_type == dev_type && name == criteria {
                 let slot = cspace_mgr.alloc(res_client)?;
-                cspace_mgr.root().mint(*ep, slot, badge, Rights::ALL)?;
+                CSPACE_CAP.mint(*ep, slot, badge, Rights::ALL)?;
                 return Ok(Endpoint::from(slot));
             }
         }

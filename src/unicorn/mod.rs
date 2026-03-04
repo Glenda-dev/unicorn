@@ -12,7 +12,7 @@ use glenda::interface::ProcessService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::{DeviceDesc, HookTarget, MMIORegion};
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
-use glenda::utils::manager::CSpaceManager;
+use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 use glenda_drivers::protocol::thermal::ThermalZones;
 
 pub mod device;
@@ -28,6 +28,7 @@ pub struct UnicornManager<'a> {
     pub reply: Reply,
     pub recv: CapPtr,
     pub cspace_mgr: &'a mut CSpaceManager,
+    pub vspace_mgr: &'a mut VSpaceManager,
     pub res_client: &'a mut ResourceClient,
     pub proc_client: &'a mut ProcessClient,
     pub init_client: &'a mut InitClient,
@@ -46,6 +47,7 @@ pub struct UnicornManager<'a> {
 impl<'a> UnicornManager<'a> {
     pub fn new(
         cspace_mgr: &'a mut CSpaceManager,
+        vspace_mgr: &'a mut VSpaceManager,
         res_client: &'a mut ResourceClient,
         proc_client: &'a mut ProcessClient,
         init_client: &'a mut InitClient,
@@ -56,6 +58,7 @@ impl<'a> UnicornManager<'a> {
             reply: Reply::from(CapPtr::null()),
             recv: CapPtr::null(),
             cspace_mgr,
+            vspace_mgr,
             res_client,
             proc_client,
             init_client,

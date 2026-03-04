@@ -4,7 +4,7 @@ use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
 use glenda::interface::{
-    DeviceService, InitService, MemoryService, ResourceService, SystemService,
+    DeviceService, InitService, ResourceService, SystemService, VSpaceService,
 };
 use glenda::ipc::server::{handle_buffer_call, handle_call, handle_cap_call, handle_notify};
 use glenda::ipc::{Badge, MsgTag, UTCB};
@@ -12,22 +12,39 @@ use glenda::protocol::device;
 use glenda::protocol::init::ServiceState;
 use glenda::protocol::resource::{DEVICE_ENDPOINT, ResourceType};
 use glenda::protocol::{self, DEVICE_PROTO};
-use glenda::utils::manager::CSpaceService;
 
 impl<'a> SystemService for UnicornManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
         log!("Loading config ...");
         let (frame, size) =
             self.res_client.get_config(Badge::null(), "drivers.json", MANIFEST_SLOT)?;
-        self.res_client.mmap(Badge::null(), frame, RESOURCE_ADDR, size)?;
+        {
+            self.vspace_mgr.map_frame(
+                frame,
+                RESOURCE_ADDR,
+                glenda::mem::Perms::READ | glenda::mem::Perms::WRITE,
+                (size + PGSIZE - 1) / PGSIZE,
+                self.res_client,
+                self.cspace_mgr,
+            )?;
+        }
         let data = unsafe { core::slice::from_raw_parts(RESOURCE_ADDR as *const u8, size) };
         self.config = serde_json::from_slice(data).map_err(|_| Error::InvalidConfig)?;
-        self.res_client.munmap(Badge::null(), RESOURCE_ADDR, size)?;
+        self.vspace_mgr.unmap(RESOURCE_ADDR, (size + PGSIZE - 1) / PGSIZE)?;
 
         log!("Loading Bootinfo ...");
         let frame =
             self.res_client.get_cap(Badge::null(), ResourceType::Bootinfo, 0, BOOTINFO_SLOT)?;
-        self.res_client.mmap(Badge::null(), Frame::from(frame), BOOTINFO_ADDR, PGSIZE)?;
+        {
+            self.vspace_mgr.map_frame(
+                Frame::from(frame),
+                BOOTINFO_ADDR,
+                glenda::mem::Perms::READ,
+                1,
+                self.res_client,
+                self.cspace_mgr,
+            )?;
+        }
 
         self.init_root_platform()?;
         self.init_initrd_device()?;
@@ -62,7 +79,6 @@ impl<'a> SystemService for UnicornManager<'a> {
 
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
-            let _ = self.cspace_mgr.root().delete(self.recv);
             utcb.set_reply_window(self.reply.cap());
             utcb.set_recv_window(self.recv);
             match self.endpoint.recv(&mut utcb) {
