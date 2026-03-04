@@ -13,7 +13,7 @@ use glenda::ipc::Badge;
 use glenda::protocol::device::{DeviceDesc, HookTarget, MMIORegion};
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::{CSpaceManager, VSpaceManager};
-use glenda_drivers::protocol::thermal::ThermalZones;
+use glenda::drivers::protocol::thermal::ThermalZones;
 
 pub mod device;
 pub mod logic;
