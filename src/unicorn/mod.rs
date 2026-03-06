@@ -7,13 +7,13 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::client::{InitClient, ProcessClient, ResourceClient};
+use glenda::drivers::protocol::thermal::ThermalZones;
 use glenda::error::Error;
 use glenda::interface::ProcessService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::{DeviceDesc, HookTarget, MMIORegion};
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::{CSpaceManager, VSpaceManager};
-use glenda::drivers::protocol::thermal::ThermalZones;
 
 pub mod device;
 pub mod logic;
