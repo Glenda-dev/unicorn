@@ -46,7 +46,7 @@ impl<'a> UnicornManager<'a> {
         let mut notify_eps = Vec::new();
         for (target, hook_ep) in hooks {
             let notify = match target {
-                HookTarget::Endpoint(e) => *e == ep.bits() as u64,
+                HookTarget::Endpoint(e) => *e == ep.bits() as usize,
                 HookTarget::Type(t) => *t == desc.dev_type,
             };
             if notify {
@@ -245,9 +245,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
         &mut self,
         _badge: Badge,
         name: &str,
-    ) -> Result<(u64, LogicDeviceDesc), Error> {
+    ) -> Result<(usize, LogicDeviceDesc), Error> {
         let (id, desc) = self.logic_service.get_desc(name).ok_or(Error::NotFound)?;
-        Ok((id as u64, desc))
+        Ok((id as usize, desc))
     }
 
     fn hook(&mut self, _badge: Badge, target: HookTarget, endpoint: CapPtr) -> Result<(), Error> {
