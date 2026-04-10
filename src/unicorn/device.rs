@@ -252,7 +252,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
     fn hook(&mut self, _badge: Badge, target: HookTarget, endpoint: CapPtr) -> Result<(), Error> {
         let slot = self.cspace_mgr.alloc(self.res_client)?;
-        CSPACE_CAP.move_cap(endpoint, slot)?;
+        CSPACE_CAP.transfer_self(endpoint, slot)?;
         log!("Registering hook for target {:?} at endpoint {:?}", target, slot);
         let new_hook = (target, slot);
         self.hooks.push(new_hook);

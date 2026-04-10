@@ -58,7 +58,7 @@ impl LogicDeviceService {
         endpoint: CapPtr,
     ) -> Result<(usize, String, CapPtr), Error> {
         let ep = cspace_mgr.alloc(res_client)?;
-        CSPACE_CAP.move_cap(endpoint, ep)?;
+        CSPACE_CAP.transfer_self(endpoint, ep)?;
 
         let name = match desc.dev_type {
             device::LogicDeviceType::Block => {
@@ -127,7 +127,7 @@ impl LogicDeviceService {
         for (_id, (desc, ep, name)) in self.devices.iter() {
             if desc.dev_type == dev_type && name == criteria {
                 let slot = cspace_mgr.alloc(res_client)?;
-                CSPACE_CAP.mint(*ep, slot, badge, Rights::ALL)?;
+                CSPACE_CAP.mint_self(*ep, slot, badge, Rights::ALL)?;
                 return Ok(Endpoint::from(slot));
             }
         }

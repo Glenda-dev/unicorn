@@ -1,7 +1,7 @@
 use crate::UnicornManager;
 use crate::layout::{BOOTINFO_ADDR, BOOTINFO_SLOT, MANIFEST_SLOT, RESOURCE_ADDR};
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CapPtr, Endpoint, Frame, Reply};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Frame, Reply};
 use glenda::error::Error;
 use glenda::interface::{
     DeviceService, InitService, ResourceService, SystemService, VSpaceService,
@@ -71,6 +71,9 @@ impl<'a> SystemService for UnicornManager<'a> {
         self.init_client.report_service(Badge::null(), ServiceState::Running)?;
         self.running = true;
         while self.running {
+            // 清理上一轮可能残留的 Reply Cap，避免引用跨轮次滞留。
+            let _ = CSPACE_CAP.delete(self.reply.cap());
+
             while let Some(id) = self.spawn_queue.pop_front() {
                 if let Err(e) = self.start_driver(id) {
                     error!("Failed to start driver for device {}: {:?}", id.index, e);
@@ -96,6 +99,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             let res = self.dispatch(&mut utcb);
             if let Err(e) = res {
                 if e == Error::Success {
+                    let _ = CSPACE_CAP.delete(self.reply.cap());
                     continue;
                 }
                 error!(
