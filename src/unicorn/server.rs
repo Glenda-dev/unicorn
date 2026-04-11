@@ -55,9 +55,9 @@ impl<'a> SystemService for UnicornManager<'a> {
     }
 
     fn listen(&mut self, ep: Endpoint, reply: CapPtr, recv: CapPtr) -> Result<(), Error> {
-        self.endpoint = ep;
-        self.reply = Reply::from(reply);
-        self.recv = recv;
+        self.ipc.endpoint = ep;
+        self.ipc.reply = Reply::from(reply);
+        self.ipc.recv = recv;
         self.res_client.register_cap(
             Badge::null(),
             ResourceType::Endpoint,
@@ -69,10 +69,10 @@ impl<'a> SystemService for UnicornManager<'a> {
 
     fn run(&mut self) -> Result<(), Error> {
         self.init_client.report_service(Badge::null(), ServiceState::Running)?;
-        self.running = true;
-        while self.running {
+        self.ipc.running = true;
+        while self.ipc.running {
             // 清理上一轮可能残留的 Reply Cap，避免引用跨轮次滞留。
-            let _ = CSPACE_CAP.delete(self.reply.cap());
+            let _ = CSPACE_CAP.delete(self.ipc.reply.cap());
 
             while let Some(id) = self.spawn_queue.pop_front() {
                 if let Err(e) = self.start_driver(id) {
@@ -82,9 +82,9 @@ impl<'a> SystemService for UnicornManager<'a> {
 
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
-            utcb.set_reply_window(self.reply.cap());
-            utcb.set_recv_window(self.recv);
-            match self.endpoint.recv(&mut utcb) {
+            utcb.set_reply_window(self.ipc.reply.cap());
+            utcb.set_recv_window(self.ipc.recv);
+            match self.ipc.endpoint.recv(&mut utcb) {
                 Ok(_) => {}
                 Err(e) => {
                     error!("Recv error: {:?}", e);
@@ -99,7 +99,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             let res = self.dispatch(&mut utcb);
             if let Err(e) = res {
                 if e == Error::Success {
-                    let _ = CSPACE_CAP.delete(self.reply.cap());
+                    let _ = CSPACE_CAP.delete(self.ipc.reply.cap());
                     continue;
                 }
                 error!(
@@ -159,7 +159,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             (DEVICE_PROTO, device::HOOK) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
                     let target = unsafe { u.read_postcard()? };
-                    s.hook(badge, target, s.recv)
+                    s.hook(badge, target, s.ipc.recv)
                 })
             },
             (DEVICE_PROTO, device::UNHOOK) => |s: &mut Self, u: &mut UTCB| {
@@ -174,7 +174,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             (DEVICE_PROTO, device::REGISTER_LOGIC) => |s: &mut Self, u: &mut UTCB| {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
-                    s.register_logic(badge, desc, s.recv)
+                    s.register_logic(badge, desc, s.ipc.recv)
                 })
             },
             (DEVICE_PROTO, device::ALLOC_LOGIC) => |s: &mut Self, u: &mut UTCB| {
@@ -214,11 +214,11 @@ impl<'a> SystemService for UnicornManager<'a> {
     }
 
     fn reply(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
-        self.reply.reply(utcb)
+        self.ipc.reply.reply(utcb)
     }
 
     fn stop(&mut self) {
-        self.running = false;
+        self.ipc.running = false;
         self.init_client.report_service(Badge::null(), ServiceState::Stopped).unwrap_or_else(|e| {
             error!("Failed to report stopped state: {:?}", e);
         });

@@ -22,11 +22,15 @@ pub mod server;
 
 use logic::LogicDeviceService;
 
-pub struct UnicornManager<'a> {
+pub struct UnicornIpc {
     pub running: bool,
     pub endpoint: Endpoint,
     pub reply: Reply,
     pub recv: CapPtr,
+}
+
+pub struct UnicornManager<'a> {
+    pub ipc: UnicornIpc,
     pub cspace_mgr: &'a mut CSpaceManager,
     pub vspace_mgr: &'a mut VSpaceManager,
     pub res_client: &'a mut ResourceClient,
@@ -53,10 +57,12 @@ impl<'a> UnicornManager<'a> {
         init_client: &'a mut InitClient,
     ) -> Self {
         Self {
-            running: false,
-            endpoint: Endpoint::from(CapPtr::null()),
-            reply: Reply::from(CapPtr::null()),
-            recv: CapPtr::null(),
+            ipc: UnicornIpc {
+                running: false,
+                endpoint: Endpoint::from(CapPtr::null()),
+                reply: Reply::from(CapPtr::null()),
+                recv: CapPtr::null(),
+            },
             cspace_mgr,
             vspace_mgr,
             res_client,
