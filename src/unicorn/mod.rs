@@ -9,9 +9,10 @@ use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::client::{InitClient, ProcessClient, ResourceClient};
 use glenda::drivers::protocol::thermal::ThermalZones;
 use glenda::error::Error;
-use glenda::interface::ProcessService;
+use glenda::interface::{InitService, ProcessService};
 use glenda::ipc::Badge;
 use glenda::protocol::device::{DeviceDesc, HookTarget, MMIORegion};
+use glenda::protocol::init::ServiceState;
 use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 
@@ -39,6 +40,7 @@ pub struct UnicornManager<'a> {
     pub config: Manifest,
     pub tree: DeviceTree,
     pub pids: BTreeMap<usize, DeviceId>, // driver_badge -> node_id
+    pub driver_states: BTreeMap<usize, ServiceState>,
     pub irqs: BTreeMap<usize, DeviceId>, // irq_num -> node_id
     pub irq_caps: BTreeMap<usize, CapPtr>,
     pub mmio_caps: BTreeMap<usize, CapPtr>, // base_addr -> slot
@@ -46,6 +48,7 @@ pub struct UnicornManager<'a> {
     pub thermal_zones: BTreeMap<usize, (ThermalZones, String)>, // (zones, driver_name)
     pub hooks: Vec<(HookTarget, CapPtr)>,
     pub spawn_queue: VecDeque<DeviceId>,
+    pub running_reported: bool,
 }
 
 impl<'a> UnicornManager<'a> {
@@ -71,6 +74,7 @@ impl<'a> UnicornManager<'a> {
             config: Manifest::new(),
             tree: DeviceTree::new(),
             pids: BTreeMap::new(),
+            driver_states: BTreeMap::new(),
             irqs: BTreeMap::new(),
             irq_caps: BTreeMap::new(),
             mmio_caps: BTreeMap::new(),
@@ -78,6 +82,7 @@ impl<'a> UnicornManager<'a> {
             thermal_zones: BTreeMap::new(),
             hooks: Vec::new(),
             spawn_queue: VecDeque::new(),
+            running_reported: false,
         }
     }
 
@@ -157,18 +162,89 @@ impl<'a> UnicornManager<'a> {
 
         match self.proc_client.spawn(Badge::null(), &drv_binary) {
             Ok(pid) => {
+                let old_status =
+                    self.driver_states.get(&pid).copied().unwrap_or(ServiceState::Stopped);
                 let node = self.tree.get_node_mut(id).ok_or(Error::InvalidArgs)?;
                 self.pids.insert(pid, id);
-                node.state = DeviceState::Running;
+                self.driver_states.insert(pid, ServiceState::Starting);
+                node.state = DeviceState::Starting;
+                log!(
+                    "Service {} transition: {:?} -> {:?}",
+                    node.desc.name,
+                    old_status,
+                    ServiceState::Starting
+                );
                 Ok(())
             }
             Err(e) => {
                 let node = self.tree.get_node_mut(id).ok_or(Error::InvalidArgs)?;
                 log!("Failed to spawn driver {}: {:?}", drv_binary, e);
+                log!(
+                    "Service {} transition: {:?} -> {:?}",
+                    node.desc.name,
+                    ServiceState::Starting,
+                    ServiceState::Failed
+                );
                 node.state = DeviceState::Error;
                 Err(e)
             }
         }
+    }
+
+    pub(crate) fn try_report_running(&mut self) {
+        if self.running_reported {
+            return;
+        }
+
+        if !self.spawn_queue.is_empty() {
+            return;
+        }
+
+        if self.has_pending_startable_nodes() {
+            return;
+        }
+
+        let all_running = self
+            .pids
+            .keys()
+            .all(|pid| self.driver_states.get(pid).copied() == Some(ServiceState::Running));
+
+        if all_running {
+            match self.init_client.report_service(Badge::null(), ServiceState::Running) {
+                Ok(_) => {
+                    self.running_reported = true;
+                    log!("All spawned drivers are ready, unicorn reported Running");
+                }
+                Err(e) => {
+                    error!("Failed to report unicorn running state: {:?}", e);
+                }
+            }
+        }
+    }
+
+    fn has_pending_startable_nodes(&self) -> bool {
+        let Some(root) = self.tree.root else {
+            return false;
+        };
+
+        let mut queue = VecDeque::new();
+        queue.push_back(root);
+
+        while let Some(id) = queue.pop_front() {
+            if let Some(node) = self.tree.get_node(id) {
+                if node.state == DeviceState::Ready
+                    && self.match_driver(&node.desc.name, &node.desc.compatible).is_some()
+                {
+                    return true;
+                }
+
+                for child in &node.children {
+                    queue.push_back(*child);
+                }
+            }
+        }
+
+        false
     }
 
     fn match_driver(&self, dev_name: &str, dev_compat: &[String]) -> Option<&str> {

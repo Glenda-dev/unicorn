@@ -68,7 +68,7 @@ impl<'a> SystemService for UnicornManager<'a> {
     }
 
     fn run(&mut self) -> Result<(), Error> {
-        self.init_client.report_service(Badge::null(), ServiceState::Running)?;
+        self.init_client.report_service(Badge::null(), ServiceState::Starting)?;
         self.ipc.running = true;
         while self.ipc.running {
             // 清理上一轮可能残留的 Reply Cap，避免引用跨轮次滞留。
@@ -79,6 +79,7 @@ impl<'a> SystemService for UnicornManager<'a> {
                     error!("Failed to start driver for device {}: {:?}", id.index, e);
                 }
             }
+            self.try_report_running();
 
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
@@ -132,6 +133,12 @@ impl<'a> SystemService for UnicornManager<'a> {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
                     s.report(badge, desc)
+                })
+            },
+            (DEVICE_PROTO, device::REPORT_STATE) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let status = ServiceState::from(u.get_mr(0));
+                    s.report_state(badge, status)
                 })
             },
             (DEVICE_PROTO, device::UPDATE) => |s: &mut Self, u: &mut UTCB| {

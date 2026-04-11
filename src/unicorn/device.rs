@@ -11,6 +11,7 @@ use glenda::interface::CSpaceService;
 use glenda::interface::DeviceService;
 use glenda::ipc::Badge;
 use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc, NOTIFY_HOOK};
+use glenda::protocol::init::ServiceState;
 
 impl<'a> UnicornManager<'a> {
     fn scan_subtree(&mut self, start_id: DeviceId) -> Result<(), Error> {
@@ -159,13 +160,36 @@ impl<'a> DeviceService for UnicornManager<'a> {
         }
     }
 
+    fn report_state(&mut self, badge: Badge, status: ServiceState) -> Result<(), Error> {
+        let driver_id = badge.bits();
+        let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
+
+        let old_status =
+            self.driver_states.get(&driver_id).copied().unwrap_or(ServiceState::Stopped);
+
+        self.driver_states.insert(driver_id, status);
+        if let Some(node) = self.tree.get_node_mut(node_id) {
+            log!("Service {} transition: {:?} -> {:?}", node.desc.name, old_status, status);
+            node.state = match status {
+                ServiceState::Starting => super::DeviceState::Starting,
+                ServiceState::Running => super::DeviceState::Running,
+                ServiceState::Stopped | ServiceState::Exited | ServiceState::Failed => {
+                    super::DeviceState::Error
+                }
+            };
+        }
+
+        self.try_report_running();
+        Ok(())
+    }
+
     fn update(
         &mut self,
         badge: Badge,
         compatible: Vec<alloc::string::String>,
     ) -> Result<(), Error> {
         let driver_id = badge.bits();
-        if let Some(node_id) = self.pids.remove(&driver_id) {
+        if let Some(&node_id) = self.pids.get(&driver_id) {
             {
                 let node = self.tree.get_node_mut(node_id).ok_or(Error::InvalidArgs)?;
                 node.desc.compatible = compatible;
@@ -256,7 +280,6 @@ impl<'a> DeviceService for UnicornManager<'a> {
         log!("Registering hook for target {:?} at endpoint {:?}", target, slot);
         let new_hook = (target, slot);
         self.hooks.push(new_hook);
-        Endpoint::from(slot).notify(Badge::new(NOTIFY_HOOK))?;
         Ok(())
     }
 

@@ -22,6 +22,7 @@ pub struct DeviceNode {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeviceState {
+    Starting,
     Running,
     Ready,
     Error,
@@ -121,6 +122,7 @@ impl DeviceTree {
             let indent = "  ".repeat(level);
             // Print basic info: name, type, and status
             let status = match node.state {
+                DeviceState::Starting => "STARTING",
                 DeviceState::Running => "RUNNING",
                 DeviceState::Ready => "READY",
                 DeviceState::Error => "ERROR",
