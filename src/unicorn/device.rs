@@ -1,5 +1,4 @@
-use super::DeviceState;
-use super::platform::DeviceId;
+use super::platform::{DeviceId, DeviceState};
 use crate::layout::{IRQ_CONTROL_CAP, KERNEL_CAP};
 use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
@@ -9,24 +8,60 @@ use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Frame, IrqHandler};
 use glenda::error::Error;
 use glenda::interface::CSpaceService;
 use glenda::interface::DeviceService;
+use glenda::interface::VSpaceService;
 use glenda::ipc::Badge;
+use glenda::mem::Perms;
 use glenda::protocol::device::{self, DeviceDescNode, HookTarget, LogicDeviceDesc, NOTIFY_HOOK};
 use glenda::protocol::init::ServiceState;
 
 impl<'a> UnicornManager<'a> {
+    pub(super) fn report_frame_cap(
+        &mut self,
+        badge: Badge,
+        frame_slot: CapPtr,
+        byte_len: usize,
+    ) -> Result<(), Error> {
+        if byte_len == 0 {
+            return Err(Error::InvalidArgs);
+        }
+
+        let pages = (byte_len + PGSIZE - 1) / PGSIZE;
+        self.vspace_mgr.map_frame(
+            Frame::from(frame_slot),
+            crate::layout::RESOURCE_ADDR,
+            Perms::READ,
+            pages,
+            self.res_client,
+            self.cspace_mgr,
+        )?;
+
+        let parse_res = {
+            let data = unsafe {
+                core::slice::from_raw_parts(crate::layout::RESOURCE_ADDR as *const u8, byte_len)
+            };
+            postcard::from_bytes::<Vec<DeviceDescNode>>(data).map_err(|_| Error::InvalidType)
+        };
+
+        let _ = self.vspace_mgr.unmap(crate::layout::RESOURCE_ADDR, pages);
+        let _ = CSPACE_CAP.delete(frame_slot);
+
+        let desc = parse_res?;
+        self.report(badge, desc)
+    }
+
     fn scan_subtree(&mut self, start_id: DeviceId) -> Result<(), Error> {
         let mut queue = VecDeque::new();
         queue.push_back(start_id);
 
         while let Some(id) = queue.pop_front() {
-            let (needs_start, children) = if let Some(node) = self.tree.get_node(id) {
-                (node.state == DeviceState::Ready, node.children.clone())
+            let (can_start, children) = if let Some(node) = self.tree.get_node(id) {
+                (self.can_start_node(id), node.children.clone())
             } else {
                 (false, alloc::vec![])
             };
 
-            if needs_start {
-                self.spawn_queue.push_back(id);
+            if can_start {
+                self.enqueue_if_absent(id);
             }
 
             for child in children {
@@ -150,6 +185,10 @@ impl<'a> DeviceService for UnicornManager<'a> {
         Ok(handler)
     }
 
+    fn report_frame(&mut self, badge: Badge, frame: CapPtr, byte_len: usize) -> Result<(), Error> {
+        self.report_frame_cap(badge, frame, byte_len)
+    }
+
     fn report(&mut self, badge: Badge, desc: Vec<DeviceDescNode>) -> Result<(), Error> {
         let driver_id = badge.bits();
         if let Some(&node_id) = self.pids.get(&driver_id) {
@@ -171,12 +210,18 @@ impl<'a> DeviceService for UnicornManager<'a> {
         if let Some(node) = self.tree.get_node_mut(node_id) {
             log!("Service {} transition: {:?} -> {:?}", node.desc.name, old_status, status);
             node.state = match status {
-                ServiceState::Starting => super::DeviceState::Starting,
-                ServiceState::Running => super::DeviceState::Running,
+                ServiceState::Starting => DeviceState::Starting,
+                ServiceState::Running => DeviceState::Running,
                 ServiceState::Stopped | ServiceState::Exited | ServiceState::Failed => {
-                    super::DeviceState::Error
+                    DeviceState::Error
                 }
             };
+        }
+
+        if status == ServiceState::Running {
+            if let Some(root) = self.tree.root {
+                self.scan_subtree(root)?;
+            }
         }
 
         self.try_report_running();
@@ -193,7 +238,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             {
                 let node = self.tree.get_node_mut(node_id).ok_or(Error::InvalidArgs)?;
                 node.desc.compatible = compatible;
-                node.state = super::DeviceState::Ready;
+                node.state = DeviceState::Ready;
             }
             self.scan_subtree(node_id)
         } else {

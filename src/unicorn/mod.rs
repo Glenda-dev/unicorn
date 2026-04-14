@@ -1,27 +1,32 @@
 use crate::config::Manifest;
-use crate::layout::IRQ_CONTROL_CAP;
-use crate::unicorn::platform::{DeviceId, DeviceState, DeviceTree};
-use alloc::collections::{BTreeMap, VecDeque};
+use crate::unicorn::platform::{DeviceId, DeviceTree};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::client::{InitClient, ProcessClient, ResourceClient};
 use glenda::drivers::protocol::thermal::ThermalZones;
-use glenda::error::Error;
-use glenda::interface::{InitService, ProcessService};
-use glenda::ipc::Badge;
-use glenda::protocol::device::{DeviceDesc, HookTarget, MMIORegion};
+use glenda::protocol::device::HookTarget;
 use glenda::protocol::init::ServiceState;
-use glenda::utils::bootinfo::{BootInfo, PlatformType};
 use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 
 pub mod device;
+pub mod init;
 pub mod logic;
 pub mod platform;
 pub mod server;
 
 use logic::LogicDeviceService;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BringupPhase {
+    Discovering,
+    Planning,
+    Spawning,
+    Probing,
+    Ready,
+    Failed,
+}
 
 pub struct UnicornIpc {
     pub running: bool,
@@ -48,6 +53,10 @@ pub struct UnicornManager<'a> {
     pub thermal_zones: BTreeMap<usize, (ThermalZones, String)>, // (zones, driver_name)
     pub hooks: Vec<(HookTarget, CapPtr)>,
     pub spawn_queue: VecDeque<DeviceId>,
+    pub queued_nodes: BTreeSet<DeviceId>,
+    pub node_driver_names: BTreeMap<DeviceId, String>,
+    pub bringup_phase: BringupPhase,
+    pub blocked_count: usize,
     pub running_reported: bool,
 }
 
@@ -82,186 +91,11 @@ impl<'a> UnicornManager<'a> {
             thermal_zones: BTreeMap::new(),
             hooks: Vec::new(),
             spawn_queue: VecDeque::new(),
+            queued_nodes: BTreeSet::new(),
+            node_driver_names: BTreeMap::new(),
+            bringup_phase: BringupPhase::Discovering,
+            blocked_count: usize::MAX,
             running_reported: false,
         }
-    }
-
-    pub fn init_root_platform(&mut self) -> Result<(), Error> {
-        let bootinfo = unsafe { &*(crate::layout::BOOTINFO_ADDR as *const BootInfo) };
-        let (name, addr, size) = match bootinfo.platform_type {
-            PlatformType::ACPI => ("acpi", bootinfo.addr, bootinfo.size),
-            PlatformType::DTB => ("dtb", bootinfo.addr, bootinfo.size),
-            _ => return Ok(()),
-        };
-
-        log!("Initializing root platform: {}", name);
-
-        let root_desc = DeviceDesc {
-            name: String::from(name),
-            compatible: Vec::new(),
-            mmio: alloc::vec![MMIORegion { base_addr: addr, size }],
-            irq: Vec::new(),
-        };
-        self.tree.insert(None, root_desc)?;
-        let cpus = bootinfo.cpus as usize;
-        for cpu_id in 0..cpus {
-            IRQ_CONTROL_CAP.set_threshold(cpu_id, 0)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn init_initrd_device(&mut self) -> Result<(), Error> {
-        let bootinfo = unsafe { &*(crate::layout::BOOTINFO_ADDR as *const BootInfo) };
-        if bootinfo.initrd_size == 0 {
-            return Ok(());
-        }
-
-        log!(
-            "Initializing Initrd Ramdisk device (paddr={:#x}, size={:#x})",
-            bootinfo.initrd_paddr,
-            bootinfo.initrd_size
-        );
-
-        let ramdisk_desc = DeviceDesc {
-            name: String::from("ramdisk"),
-            compatible: alloc::vec![String::from("ramdisk")],
-            mmio: alloc::vec![MMIORegion {
-                base_addr: bootinfo.initrd_paddr,
-                size: bootinfo.initrd_size,
-            }],
-            irq: Vec::new(),
-        };
-
-        // Add under root node
-        self.tree.insert(self.tree.root, ramdisk_desc)?;
-        Ok(())
-    }
-    fn start_driver(&mut self, id: DeviceId) -> Result<(), Error> {
-        // 1. Get Node and clone name to release borrow
-        let (drv_name, drv_compat) = {
-            let node_ref = self.tree.get_node(id).ok_or(Error::InvalidArgs)?;
-            if node_ref.state != DeviceState::Ready {
-                return Ok(());
-            }
-            (node_ref.desc.name.clone(), node_ref.desc.compatible.clone())
-        };
-
-        // 2. Match driver
-        // Simplified matching: check by name or compatible string for now
-        // In real world, use PCI ID / Compatible string
-
-        let drv_binary = if let Some(bin) = self.match_driver(&drv_name, &drv_compat) {
-            bin.to_string()
-        } else {
-            // No driver found, ignore
-            return Ok(());
-        };
-
-        log!("Starting driver {} for device {}", drv_binary, id.index);
-
-        match self.proc_client.spawn(Badge::null(), &drv_binary) {
-            Ok(pid) => {
-                let old_status =
-                    self.driver_states.get(&pid).copied().unwrap_or(ServiceState::Stopped);
-                let node = self.tree.get_node_mut(id).ok_or(Error::InvalidArgs)?;
-                self.pids.insert(pid, id);
-                self.driver_states.insert(pid, ServiceState::Starting);
-                node.state = DeviceState::Starting;
-                log!(
-                    "Service {} transition: {:?} -> {:?}",
-                    node.desc.name,
-                    old_status,
-                    ServiceState::Starting
-                );
-                Ok(())
-            }
-            Err(e) => {
-                let node = self.tree.get_node_mut(id).ok_or(Error::InvalidArgs)?;
-                log!("Failed to spawn driver {}: {:?}", drv_binary, e);
-                log!(
-                    "Service {} transition: {:?} -> {:?}",
-                    node.desc.name,
-                    ServiceState::Starting,
-                    ServiceState::Failed
-                );
-                node.state = DeviceState::Error;
-                Err(e)
-            }
-        }
-    }
-
-    pub(crate) fn try_report_running(&mut self) {
-        if self.running_reported {
-            return;
-        }
-
-        if !self.spawn_queue.is_empty() {
-            return;
-        }
-
-        if self.has_pending_startable_nodes() {
-            return;
-        }
-
-        let all_running = self
-            .pids
-            .keys()
-            .all(|pid| self.driver_states.get(pid).copied() == Some(ServiceState::Running));
-
-        if all_running {
-            match self.init_client.report_service(Badge::null(), ServiceState::Running) {
-                Ok(_) => {
-                    self.running_reported = true;
-                    log!("All spawned drivers are ready, unicorn reported Running");
-                }
-                Err(e) => {
-                    error!("Failed to report unicorn running state: {:?}", e);
-                }
-            }
-        }
-    }
-
-    fn has_pending_startable_nodes(&self) -> bool {
-        let Some(root) = self.tree.root else {
-            return false;
-        };
-
-        let mut queue = VecDeque::new();
-        queue.push_back(root);
-
-        while let Some(id) = queue.pop_front() {
-            if let Some(node) = self.tree.get_node(id) {
-                if node.state == DeviceState::Ready
-                    && self.match_driver(&node.desc.name, &node.desc.compatible).is_some()
-                {
-                    return true;
-                }
-
-                for child in &node.children {
-                    queue.push_back(*child);
-                }
-            }
-        }
-
-        false
-    }
-
-    fn match_driver(&self, dev_name: &str, dev_compat: &[String]) -> Option<&str> {
-        // Iterate over manifest drivers
-        for drv in &self.config.drivers {
-            // Simple match: if driver name matches device name
-            // Or if driver handles the "device_name"
-            if drv.compatible.iter().any(|c| c == dev_name) {
-                return Some(&drv.name);
-            }
-            // Check if driver matches any of the device's compatible strings
-            for dc in dev_compat {
-                if drv.compatible.iter().any(|c| c == dc) {
-                    return Some(&drv.name);
-                }
-            }
-        }
-        None
     }
 }

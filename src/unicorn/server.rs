@@ -7,7 +7,7 @@ use glenda::interface::{
     DeviceService, InitService, ResourceService, SystemService, VSpaceService,
 };
 use glenda::ipc::server::{handle_buffer_call, handle_call, handle_cap_call, handle_notify};
-use glenda::ipc::{Badge, MsgTag, UTCB};
+use glenda::ipc::{Badge, MsgFlags, MsgTag, UTCB};
 use glenda::protocol::device;
 use glenda::protocol::init::ServiceState;
 use glenda::protocol::resource::{DEVICE_ENDPOINT, ResourceType};
@@ -75,6 +75,7 @@ impl<'a> SystemService for UnicornManager<'a> {
             let _ = CSPACE_CAP.delete(self.ipc.reply.cap());
 
             while let Some(id) = self.spawn_queue.pop_front() {
+                self.queued_nodes.remove(&id);
                 if let Err(e) = self.start_driver(id) {
                     error!("Failed to start driver for device {}: {:?}", id.index, e);
                 }
@@ -133,6 +134,15 @@ impl<'a> SystemService for UnicornManager<'a> {
                 handle_call(u, |u| {
                     let desc = unsafe { u.read_postcard()? };
                     s.report(badge, desc)
+                })
+            },
+            (DEVICE_PROTO, device::REPORT_FRAME) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    if !u.get_msg_tag().flags().contains(MsgFlags::HAS_CAP) {
+                        return Err(Error::InvalidArgs);
+                    }
+                    let byte_len = u.get_mr(0);
+                    s.report_frame(badge, s.ipc.recv, byte_len)
                 })
             },
             (DEVICE_PROTO, device::REPORT_STATE) => |s: &mut Self, u: &mut UTCB| {

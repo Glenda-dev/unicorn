@@ -10,6 +10,7 @@ pub struct Manifest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DriverEntry {
     pub name: String,
+    pub binary: String,
     pub compatible: Vec<String>,
 }
 
