@@ -1,7 +1,7 @@
 use crate::UnicornManager;
 use crate::layout::{BOOTINFO_ADDR, BOOTINFO_SLOT, MANIFEST_SLOT, RESOURCE_ADDR};
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Frame, Reply};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Page, Reply};
 use glenda::error::Error;
 use glenda::interface::{
     DeviceService, InitService, ResourceService, SystemService, VSpaceService,
@@ -19,7 +19,7 @@ impl<'a> SystemService for UnicornManager<'a> {
         let (frame, size) =
             self.res_client.get_config(Badge::null(), "drivers.json", MANIFEST_SLOT)?;
         {
-            self.vspace_mgr.map_frame(
+            self.vspace_mgr.map_page(
                 frame,
                 RESOURCE_ADDR,
                 glenda::mem::Perms::READ | glenda::mem::Perms::WRITE,
@@ -36,8 +36,8 @@ impl<'a> SystemService for UnicornManager<'a> {
         let frame =
             self.res_client.get_cap(Badge::null(), ResourceType::Bootinfo, 0, BOOTINFO_SLOT)?;
         {
-            self.vspace_mgr.map_frame(
-                Frame::from(frame),
+            self.vspace_mgr.map_page(
+                Page::from(frame),
                 BOOTINFO_ADDR,
                 glenda::mem::Perms::READ,
                 1,

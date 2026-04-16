@@ -4,7 +4,7 @@ use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Frame, IrqHandler};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Page, IrqHandler};
 use glenda::error::Error;
 use glenda::interface::CSpaceService;
 use glenda::interface::DeviceService;
@@ -26,8 +26,8 @@ impl<'a> UnicornManager<'a> {
         }
 
         let pages = (byte_len + PGSIZE - 1) / PGSIZE;
-        self.vspace_mgr.map_frame(
-            Frame::from(frame_slot),
+        self.vspace_mgr.map_page(
+            Page::from(frame_slot),
             crate::layout::RESOURCE_ADDR,
             Perms::READ,
             pages,
@@ -126,7 +126,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
         badge: Badge,
         id: usize,
         _recv: CapPtr,
-    ) -> Result<(Frame, usize, usize), Error> {
+    ) -> Result<(Page, usize, usize), Error> {
         let driver_id = badge.bits();
         let &node_id = self.pids.get(&driver_id).ok_or(Error::InvalidArgs)?;
 
@@ -141,7 +141,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
         if let Some(&slot) = self.mmio_caps.get(&base_addr) {
             log!("Using cached MMIO region for driver {}: base={:#x}", driver_id, base_addr);
-            return Ok((Frame::from(slot), base_addr, size));
+            return Ok((Page::from(slot), base_addr, size));
         }
 
         let slot = self.cspace_mgr.alloc(self.res_client)?;
@@ -155,7 +155,7 @@ impl<'a> DeviceService for UnicornManager<'a> {
             size,
             name
         );
-        Ok((Frame::from(slot), base_addr, size))
+        Ok((Page::from(slot), base_addr, size))
     }
 
     fn get_irq(&mut self, badge: Badge, id: usize, _recv: CapPtr) -> Result<IrqHandler, Error> {

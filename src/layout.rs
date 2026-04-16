@@ -1,4 +1,4 @@
-use glenda::cap::{CapPtr, Endpoint, Frame, IrqHandler, Kernel};
+use glenda::cap::{CapPtr, Endpoint, Page, IrqHandler, Kernel};
 
 pub const BOOTINFO_SLOT: CapPtr = CapPtr::from(9);
 pub const IRQ_CONTROL_SLOT: CapPtr = CapPtr::from(10);
@@ -11,8 +11,8 @@ pub const MANIFEST_SLOT: CapPtr = CapPtr::from(14);
 pub const RESOURCE_SLOT: CapPtr = CapPtr::from(15);
 pub const INIT_CAP: Endpoint = Endpoint::from(INIT_SLOT);
 
-pub const RESOURCE_CAP: Frame = Frame::from(RESOURCE_SLOT);
-pub const MANIFEST_CAP: Frame = Frame::from(MANIFEST_SLOT);
+pub const RESOURCE_CAP: Page = Page::from(RESOURCE_SLOT);
+pub const MANIFEST_CAP: Page = Page::from(MANIFEST_SLOT);
 
 pub const RESOURCE_ADDR: usize = 0x3000_0000;
 pub const BOOTINFO_ADDR: usize = 0x3100_0000;
