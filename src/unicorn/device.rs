@@ -4,7 +4,7 @@ use crate::unicorn::UnicornManager;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Page, IrqHandler};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, IrqHandler, Page, Rights};
 use glenda::error::Error;
 use glenda::interface::CSpaceService;
 use glenda::interface::DeviceService;
@@ -141,7 +141,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
         if let Some(&slot) = self.mmio_caps.get(&base_addr) {
             log!("Using cached MMIO region for driver {}: base={:#x}", driver_id, base_addr);
-            return Ok((Page::from(slot), base_addr, size));
+            let reply_slot = self.cspace_mgr.alloc(self.res_client)?;
+            CSPACE_CAP.copy_self(slot, reply_slot, Rights::ALL)?;
+            return Ok((Page::from(reply_slot), base_addr, size));
         }
 
         let slot = self.cspace_mgr.alloc(self.res_client)?;
@@ -155,7 +157,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
             size,
             name
         );
-        Ok((Page::from(slot), base_addr, size))
+        let reply_slot = self.cspace_mgr.alloc(self.res_client)?;
+        CSPACE_CAP.copy_self(slot, reply_slot, Rights::ALL)?;
+        Ok((Page::from(reply_slot), base_addr, size))
     }
 
     fn get_irq(&mut self, badge: Badge, id: usize, _recv: CapPtr) -> Result<IrqHandler, Error> {
@@ -170,7 +174,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
         if let Some(&slot) = self.irq_caps.get(&irq_num) {
             log!("Using cached IRQ for driver {}: irq_num={}", driver_id, irq_num);
-            return Ok(IrqHandler::from(slot));
+            let reply_slot = self.cspace_mgr.alloc(self.res_client)?;
+            CSPACE_CAP.copy_self(slot, reply_slot, Rights::ALL)?;
+            return Ok(IrqHandler::from(reply_slot));
         }
 
         let slot = self.cspace_mgr.alloc(self.res_client)?;
@@ -182,7 +188,9 @@ impl<'a> DeviceService for UnicornManager<'a> {
 
         self.irq_caps.insert(irq_num, slot);
         log!("Provided IRQ for driver {}: irq_num={}, slot={:?}", node.desc.name, irq_num, slot);
-        Ok(handler)
+        let reply_slot = self.cspace_mgr.alloc(self.res_client)?;
+        CSPACE_CAP.copy_self(handler.cap(), reply_slot, Rights::ALL)?;
+        Ok(IrqHandler::from(reply_slot))
     }
 
     fn report_frame(&mut self, badge: Badge, frame: CapPtr, byte_len: usize) -> Result<(), Error> {
