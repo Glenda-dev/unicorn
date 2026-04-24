@@ -1,4 +1,4 @@
-use glenda::cap::{CapPtr, Endpoint, Page, IrqHandler, Kernel};
+use glenda::cap::{CapPtr, Endpoint, IrqHandler, Kernel, Page};
 
 pub const BOOTINFO_SLOT: CapPtr = CapPtr::from(9);
 pub const IRQ_CONTROL_SLOT: CapPtr = CapPtr::from(10);
