@@ -43,7 +43,7 @@ fn main() -> usize {
         .expect("Failed to get IRQ control cap for unicorn");
 
     let mut cspace_mgr = CSpaceManager::new(CSPACE_CAP, 16);
-    let mut vspace_mgr = VSpaceManager::new(glenda::cap::VSPACE_CAP, 0x7000_0000, 0x8000_0000);
+    let mut vspace_mgr = VSpaceManager::new(glenda::cap::VSPACE_CAP, 0x7000_0000, 0x1000_0000);
     let mut init_client = InitClient::new(INIT_CAP);
     let mut server = UnicornManager::new(
         &mut cspace_mgr,
